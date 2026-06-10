@@ -1,0 +1,1341 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>巴士工具大師</title>
+    
+    <!-- iOS 專屬設定 (PWA) -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="巴士工具">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3201/3201884.png">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- SheetJS (XLSX) for Excel Export -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- React, ReactDOM, Lucide-React 模組映射 -->
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+      }
+    }
+    </script>
+    
+    <!-- Babel 編譯器 -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+    
+    <style>
+        body {
+            overscroll-behavior-y: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #root {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+        }
+    </style>
+</head>
+<body class="bg-slate-100 h-screen w-screen overflow-hidden">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel" data-type="module" data-presets="react">
+        import React, { useState, useEffect, useRef } from 'react';
+        import ReactDOM from 'react-dom/client';
+        
+        // 統一引入所有需要用到的圖標 (包含 App 1 及 App 2)
+        import { 
+            Plus, Minus, RotateCcw, FileText, ChevronRight, ChevronLeft, Search, 
+            Loader2, AlertCircle, Clock, Edit3, List, Users, Settings, 
+            Copy, Check, BusFront, User, Hash, Info, MapPin, AlertTriangle, X, Pencil, Calculator, Timer,
+            BarChart3, Trash2, TrendingUp, Calendar, CheckCircle2, StickyNote, Eye, EyeOff, GitMerge, FileSpreadsheet, Lightbulb, UserPlus, ArrowDownToLine, StopCircle,
+            Bus, ArrowLeft, Save, MessageSquare, CheckCircle, XCircle, RefreshCw, List as ListIcon, History, Camera, Home
+        } from 'lucide-react';
+
+        // ==========================================
+        // App 1: 搭車紀錄 (Ride Record App)
+        // ==========================================
+        const COMPANY_STYLES = {
+          "城巴": { bg: "bg-yellow-400", text: "text-blue-900", border: "border-yellow-500", lightBg: "bg-yellow-50", badge: "bg-yellow-400 text-blue-900", headerBg: "bg-yellow-400", headerText: "text-blue-900" },
+          "九巴": { bg: "bg-red-600", text: "text-white", border: "border-red-700", lightBg: "bg-red-50", badge: "bg-red-600 text-white", headerBg: "bg-red-600", headerText: "text-white" },
+          "龍運": { bg: "bg-orange-500", text: "text-white", border: "border-orange-600", lightBg: "bg-orange-50", badge: "bg-orange-500 text-white", headerBg: "bg-orange-500", headerText: "text-white" },
+          "新大嶼山巴士": { bg: "bg-emerald-600", text: "text-white", border: "border-emerald-700", lightBg: "bg-emerald-50", badge: "bg-emerald-600 text-white", headerBg: "bg-emerald-600", headerText: "text-white" },
+          "預設": { bg: "bg-blue-600", text: "text-white", border: "border-blue-700", lightBg: "bg-blue-50", badge: "bg-blue-600 text-white", headerBg: "bg-blue-600", headerText: "text-white" }
+        };
+        const COMPANY_MAPPING = { "CTB": "城巴", "KMB": "九巴", "LWB": "龍運", "NLB": "新大嶼山巴士" };
+        const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSBgi317ViAQll6wiBhtv_FONfG0A-9nKiNZoaMl70MeOeEvfRoF1TRA1W9ZmiTMuO7kTetDe7uUx2K/pub?output=csv";
+
+        function RideRecordApp({ onBack }) {
+          const [records, setRecords] = useState(() => JSON.parse(localStorage.getItem('bus_records') || '[]'));
+          const [busDatabase, setBusDatabase] = useState({}); 
+          const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('google_sheet_url') || DEFAULT_SHEET_URL);
+          const [isLoadingDB, setIsLoadingDB] = useState(false);
+          const [dbError, setDbError] = useState('');
+          const [currentView, setCurrentView] = useState('home'); 
+          const [viewMode, setViewMode] = useState('company'); 
+          const [draftRecord, setDraftRecord] = useState({ date: new Date().toISOString().split('T')[0] });
+          const [fleetFilter, setFleetFilter] = useState('all');
+          const [searchQuery, setSearchQuery] = useState('');
+          const [searchResults, setSearchResults] = useState([]);
+          const [clickCount, setClickCount] = useState(0);
+          const [lastClickTime, setLastClickTime] = useState(0);
+          const [isOcrLoading, setIsOcrLoading] = useState(false);
+          const fileInputRef = useRef(null);
+
+          useEffect(() => { localStorage.setItem('bus_records', JSON.stringify(records)); }, [records]);
+          useEffect(() => { fetchDatabase(sheetUrl); }, [sheetUrl]);
+
+          const handleSecretClick = () => {
+            const now = Date.now();
+            if (now - lastClickTime > 800) setClickCount(1);
+            else {
+              const newCount = clickCount + 1;
+              setClickCount(newCount);
+              if (newCount >= 10) { setCurrentView('settings'); setClickCount(0); }
+            }
+            setLastClickTime(now);
+          };
+
+          const fetchDatabase = async (url) => {
+            if (!url) return;
+            setIsLoadingDB(true); setDbError('');
+            try {
+              const res = await fetch(url);
+              if (!res.ok) throw new Error(`連線失敗 (HTTP ${res.status})`);
+              const text = await res.text();
+              const lines = text.split(/\r?\n/).slice(1);
+              const newDb = {};
+              let hasData = false;
+              lines.forEach(line => {
+                if (!line.trim()) return;
+                const parts = [];
+                let cur = ''; let inQuote = false;
+                for (let j = 0; j < line.length; j++) {
+                  if (line[j] === '"') inQuote = !inQuote;
+                  else if (line[j] === ',' && !inQuote) { parts.push(cur); cur = ''; }
+                  else cur += line[j];
+                }
+                parts.push(cur);
+                if (parts.length < 5) return; 
+                const rawCompany = parts[0]?.replace(/^"|"$/g, '').trim();
+                const maker = parts[1]?.replace(/^"|"$/g, '').trim();
+                const majorModel = parts[2]?.replace(/^"|"$/g, '').trim(); 
+                const minorModel = parts[3]?.replace(/^"|"$/g, '').trim(); 
+                const fleetNum = parts[4]?.replace(/^"|"$/g, '').trim(); 
+                const plateNum = parts[5]?.replace(/^"|"$/g, '').trim(); 
+                if (!rawCompany || !maker || !minorModel || !fleetNum) return;
+                const finalMajorModel = majorModel || minorModel;
+                const company = COMPANY_MAPPING[rawCompany.toUpperCase()] || rawCompany;
+                hasData = true;
+                let displayBusId = fleetNum;
+                if (plateNum) displayBusId = `${fleetNum} (${plateNum})`;
+                if (!newDb[company]) newDb[company] = {};
+                if (!newDb[company][maker]) newDb[company][maker] = {};
+                if (!newDb[company][maker][finalMajorModel]) newDb[company][maker][finalMajorModel] = {};
+                if (!newDb[company][maker][finalMajorModel][minorModel]) newDb[company][maker][finalMajorModel][minorModel] = [];
+                if (!newDb[company][maker][finalMajorModel][minorModel].includes(displayBusId)) {
+                  newDb[company][maker][finalMajorModel][minorModel].push(displayBusId);
+                }
+              });
+              if (hasData) setBusDatabase(newDb);
+              else throw new Error("未搵到有效資料");
+            } catch (e) { setDbError(e.message); } finally { setIsLoadingDB(false); }
+          };
+
+          const loadTesseractScript = () => new Promise((resolve, reject) => {
+            if (window.Tesseract) { resolve(); return; }
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+            script.onload = resolve;
+            script.onerror = reject;
+            document.body.appendChild(script);
+          });
+
+          const handleImageCapture = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            setIsOcrLoading(true);
+            try {
+              await loadTesseractScript();
+              const result = await window.Tesseract.recognize(file, 'eng');
+              const text = result.data.text;
+              const match = text.match(/[A-Z]{2}\s?\d{1,4}/i);
+              if (match) {
+                const plate = match[0].replace(/\s/g, '').toUpperCase();
+                handleSearch(plate);
+              } else {
+                alert("搵唔到明顯嘅車牌號碼，請對準再試！\n讀取到嘅字：" + text.substring(0, 30));
+              }
+            } catch (err) { alert("相片識別失敗，請重新嘗試。"); } finally {
+              setIsOcrLoading(false); e.target.value = null;
+            }
+          };
+
+          const goBack = () => {
+            if (currentView === 'settings') setCurrentView('home');
+            else if (currentView === 'details') setCurrentView('fleetNumber');
+            else if (currentView === 'fleetNumber') setCurrentView('select_minor');
+            else if (currentView === 'select_minor') {
+                if (viewMode === 'company') setCurrentView('select_maker');
+                else if (viewMode === 'maker') setCurrentView('select_major');
+                else if (viewMode === 'model_view') setCurrentView('select_company');
+            }
+            else if (currentView === 'select_major') setCurrentView('select_company');
+            else if (currentView === 'select_company' || currentView === 'select_maker') setCurrentView('home');
+            else if (currentView === 'list') setCurrentView('home');
+          };
+
+          const handleSave = () => {
+            if (!draftRecord.specificBus) { alert("請輸入或選擇車輛！"); return; }
+            const newRecord = { ...draftRecord, id: Date.now().toString() };
+            setRecords([newRecord, ...records]);
+            setCurrentView('home');
+            setDraftRecord({ date: new Date().toISOString().split('T')[0] });
+            setSearchQuery('');
+          };
+
+          const handleSearch = (query) => {
+            setSearchQuery(query);
+            if (!query.trim()) { setSearchResults([]); return; }
+            const results = [];
+            const q = query.toLowerCase();
+            for (const [company, makers] of Object.entries(busDatabase)) {
+              for (const [maker, majors] of Object.entries(makers)) {
+                for (const [major, minors] of Object.entries(majors)) {
+                  for (const [minor, identifiers] of Object.entries(minors)) {
+                     for (const id of identifiers) {
+                        if (id.toLowerCase().includes(q)) {
+                          results.push({ company, maker, major, minor, id });
+                          if (results.length > 50) return; 
+                        }
+                     }
+                  }
+                }
+              }
+            }
+            setSearchResults(results);
+          };
+
+          const calculateStats = (filter) => {
+            let total = 0; let riddenSet = new Set();
+            Object.entries(busDatabase).forEach(([c, makers]) => {
+              if (filter.company && filter.company !== c) return;
+              Object.entries(makers).forEach(([m, majors]) => {
+                if (filter.maker && filter.maker !== m) return;
+                Object.entries(majors).forEach(([maj, minors]) => {
+                  if (filter.majorModel && filter.majorModel !== maj) return;
+                  Object.entries(minors).forEach(([min, fleets]) => {
+                     if (filter.minorModel && filter.minorModel !== min) return;
+                     total += fleets.length;
+                  });
+                });
+              });
+            });
+            records.forEach(r => {
+              if (filter.company && r.company !== filter.company) return;
+              if (filter.maker && r.maker !== filter.maker) return;
+              if (filter.majorModel && r.majorModel !== filter.majorModel) return; 
+              const rMinor = r.minorModel || r.model;
+              if (filter.minorModel && rMinor !== filter.minorModel) return;
+              if (r.specificBus) riddenSet.add(r.specificBus);
+            });
+            return { total, ridden: riddenSet.size };
+          };
+
+          const deduceMakerFromMajor = (company, major) => {
+              const makers = busDatabase[company] || {};
+              for (const [m, majors] of Object.entries(makers)) { if (majors[major]) return m; }
+              return '';
+          };
+          const deduceMajorFromMinor = (company, maker, minor) => {
+              const majors = busDatabase[company]?.[maker] || {};
+              for (const [maj, minors] of Object.entries(majors)) { if (minors[minor]) return maj; }
+              return minor;
+          };
+          const getMinorsList = () => {
+              const minors = new Set();
+              if (viewMode === 'company') {
+                  const majors = busDatabase[draftRecord.company]?.[draftRecord.maker] || {};
+                  Object.values(majors).forEach(minorObj => Object.keys(minorObj).forEach(m => minors.add(m)));
+              } else {
+                  const minorsObj = busDatabase[draftRecord.company]?.[draftRecord.maker]?.[draftRecord.majorModel] || {};
+                  Object.keys(minorsObj).forEach(m => minors.add(m));
+              }
+              return Array.from(minors).sort();
+          };
+          const getFleetOptions = () => busDatabase[draftRecord.company]?.[draftRecord.maker]?.[draftRecord.majorModel]?.[draftRecord.minorModel] || [];
+          const getThemeStyle = () => {
+            if (draftRecord.company && currentView !== 'home' && currentView !== 'select_company') return COMPANY_STYLES[draftRecord.company] || COMPANY_STYLES["預設"];
+            return { headerBg: "bg-white", headerText: "text-gray-800 border-b border-gray-100", bg: "bg-blue-600", text: "text-white", border: "border-gray-200" };
+          };
+          const theme = getThemeStyle();
+          const formatShortDate = (dateString) => {
+            if (!dateString) return '';
+            const d = new Date(dateString);
+            return isNaN(d.getTime()) ? dateString : `${d.getMonth() + 1}月${d.getDate()}日`;
+          };
+
+          const renderHome = () => {
+            let homeItems = [];
+            if (viewMode === 'company') homeItems = Object.keys(busDatabase);
+            else if (viewMode === 'maker') {
+                const makers = new Set();
+                Object.values(busDatabase).forEach(c => Object.keys(c).forEach(m => makers.add(m)));
+                homeItems = Array.from(makers).sort();
+            } else if (viewMode === 'model_view') {
+                const majors = new Set();
+                Object.values(busDatabase).forEach(c => Object.values(c).forEach(m => Object.keys(m).forEach(maj => majors.add(maj))));
+                homeItems = Array.from(majors).sort();
+            }
+
+            return (
+            <div className="flex flex-col h-full bg-gray-50">
+              <input type="file" accept="image/*" capture="environment" ref={fileInputRef} onChange={handleImageCapture} className="hidden" />
+              {isOcrLoading && (
+                <div className="absolute inset-0 z-50 bg-black/60 flex flex-col items-center justify-center text-white">
+                    <RefreshCw size={48} className="animate-spin mb-4" />
+                    <p className="text-xl font-bold">AI 正在識別車牌...</p>
+                </div>
+              )}
+              <div className="bg-white text-gray-800 p-4 flex justify-between items-center sticky top-0 z-20 shadow-sm border-b border-gray-100">
+                <div className="flex items-center gap-3">
+                  <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-gray-100 text-gray-600"><Home size={24} /></button>
+                  <h1 onClick={handleSecretClick} className="text-xl font-bold flex items-center gap-2 cursor-pointer select-none">
+                    <Bus size={24} className="text-blue-600" /> 搭車紀錄
+                    {isLoadingDB && <RefreshCw size={16} className="animate-spin text-gray-400" />}
+                  </h1>
+                </div>
+                <button onClick={() => setCurrentView('list')} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors relative">
+                  <ListIcon size={22} />
+                  {records.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
+                </button>
+              </div>
+
+              <div className="bg-white p-4 sticky top-[68px] z-10 shadow-sm border-b border-gray-100">
+                <div className="flex gap-2 mb-3">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-3.5 text-gray-400" size={20} />
+                    <input type="text" placeholder="搜尋車隊編號或車牌..." value={searchQuery} onChange={(e) => handleSearch(e.target.value)} className="w-full bg-gray-100 pl-10 pr-10 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg transition-shadow" />
+                    {searchQuery && <button onClick={() => handleSearch('')} className="absolute right-3 top-3.5 text-gray-400 hover:text-gray-600"><XCircle size={20} /></button>}
+                  </div>
+                  <button onClick={() => fileInputRef.current.click()} className="bg-blue-600 text-white p-3 rounded-xl shadow-md active:bg-blue-700 transition-colors flex items-center justify-center">
+                     <Camera size={24} />
+                  </button>
+                </div>
+                {!searchQuery && (
+                  <div className="flex bg-gray-200/60 p-1 rounded-xl gap-1">
+                    <button onClick={() => { setViewMode('company'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'company' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>公司</button>
+                    <button onClick={() => { setViewMode('maker'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'maker' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>車廠</button>
+                    <button onClick={() => { setViewMode('model_view'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'model_view' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>大車種</button>
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                {searchQuery ? (
+                  searchResults.length > 0 ? (
+                    <div className="space-y-3">
+                      <h2 className="text-sm font-bold text-gray-500 mb-1 ml-1">搜尋結果：</h2>
+                      {searchResults.map((res, idx) => (
+                        <button key={idx} onClick={() => { setDraftRecord({ ...draftRecord, company: res.company, maker: res.maker, majorModel: res.major, minorModel: res.minor, specificBus: res.id, model: res.minor }); setCurrentView('details'); }} className="w-full bg-white border border-gray-200 p-4 rounded-xl shadow-sm flex items-center justify-between active:bg-blue-50 transition-colors text-left hover:border-blue-300">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`text-xs px-2 py-0.5 rounded shadow-sm font-bold ${COMPANY_STYLES[res.company]?.badge || COMPANY_STYLES["預設"].badge}`}>{res.company}</span>
+                              <span className="font-bold text-lg text-gray-900">{res.id}</span>
+                            </div>
+                            <div className="text-sm text-gray-500 flex items-center gap-1"><span>{res.maker}</span><ChevronRight size={12} /><span>{res.minor}</span></div>
+                          </div>
+                          <div className="bg-blue-50 text-blue-600 text-xs px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 shrink-0 ml-2">去評論 <ChevronRight size={14} /></div>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                     <div className="text-center py-12 text-gray-500"><Search size={48} className="mx-auto text-gray-300 mb-3" /><p className="text-lg font-bold text-gray-700">搵唔到呢架車</p></div>
+                  )
+                ) : (
+                  <div className="space-y-3">
+                    {homeItems.length === 0 && !isLoadingDB && !dbError ? (
+                      <div className="text-center p-6 text-gray-500 border-2 border-dashed border-gray-300 rounded-xl">資料庫空白</div>
+                    ) : (
+                      homeItems.map(item => {
+                        const style = viewMode === 'company' ? (COMPANY_STYLES[item] || COMPANY_STYLES["預設"]) : { bg: 'bg-white', text: 'text-gray-800', border: 'border-gray-200' };
+                        let filterObj = {};
+                        if (viewMode === 'company') filterObj = { company: item };
+                        else if (viewMode === 'maker') filterObj = { maker: item };
+                        else if (viewMode === 'model_view') filterObj = { majorModel: item }; 
+                        const stats = calculateStats(filterObj);
+                        return (
+                        <button key={item} onClick={() => { 
+                            if (viewMode === 'company') { setDraftRecord({ ...draftRecord, company: item }); setCurrentView('select_maker'); }
+                            else if (viewMode === 'maker') { setDraftRecord({ ...draftRecord, maker: item }); setCurrentView('select_company'); }
+                            else if (viewMode === 'model_view') { setDraftRecord({ ...draftRecord, majorModel: item }); setCurrentView('select_company'); }
+                          }}
+                          className={`w-full p-4 rounded-xl shadow-sm flex justify-between items-center transition-transform active:scale-95 text-left border-2 ${style.bg} ${style.text} ${style.border} hover:opacity-90`}
+                        >
+                          <span className="text-xl font-bold">{item}</span>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-sm font-bold px-2 py-0.5 rounded-lg ${viewMode === 'company' ? 'bg-white/20' : 'bg-gray-100 text-gray-600'}`}>
+                              {stats.ridden} / {stats.total}
+                            </span>
+                            <ChevronRight size={24} className={viewMode === 'company' ? 'opacity-70' : 'text-gray-400'} />
+                          </div>
+                        </button>
+                      )})
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )};
+
+          const renderGenericMenu = (title, items, onClickItem, getStatsFilter, isCompanyLayer = false) => (
+            <div className="flex flex-col h-full bg-gray-50">
+              <div className={`p-4 shadow-sm flex items-center gap-3 sticky top-0 z-10 ${theme.headerBg} ${theme.headerText}`}>
+                <button onClick={goBack} className="p-2 -ml-2 rounded-full hover:bg-black/10 active:bg-black/20"><ArrowLeft size={24} /></button>
+                <h1 className="text-xl font-bold">{title}</h1>
+              </div>
+              <div className="p-4 grid grid-cols-1 gap-3 overflow-y-auto">
+                {items.map(item => {
+                  const stats = calculateStats(getStatsFilter(item));
+                  const style = isCompanyLayer ? (COMPANY_STYLES[item] || COMPANY_STYLES["預設"]) : { bg: 'bg-white', text: 'text-gray-800', border: 'border-gray-200' };
+                  return (
+                  <button key={item} onClick={() => onClickItem(item)} className={`w-full p-4 rounded-xl shadow-sm flex justify-between items-center active:scale-95 text-left border-2 ${style.bg} ${style.text} ${style.border}`}>
+                    <span className="text-lg font-bold">{item}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-sm font-bold px-2 py-0.5 rounded-lg ${isCompanyLayer ? 'bg-white/20' : 'bg-gray-100 text-gray-600'}`}>{stats.ridden} / {stats.total}</span>
+                      <ChevronRight size={24} className={isCompanyLayer ? 'opacity-70' : 'text-gray-400'} />
+                    </div>
+                  </button>
+                )})}
+              </div>
+            </div>
+          );
+
+          const renderSelectCompany = () => {
+            let items = [];
+            if (viewMode === 'maker') items = Object.keys(busDatabase).filter(c => busDatabase[c][draftRecord.maker]).sort();
+            else if (viewMode === 'model_view') items = Object.keys(busDatabase).filter(c => Object.values(busDatabase[c]).some(m => m[draftRecord.majorModel])).sort();
+            return renderGenericMenu('揀公司', items, (item) => {
+              if (viewMode === 'maker') { setDraftRecord({ ...draftRecord, company: item }); setCurrentView('select_major'); } 
+              else if (viewMode === 'model_view') {
+                  const deducedMaker = deduceMakerFromMajor(item, draftRecord.majorModel);
+                  setDraftRecord({ ...draftRecord, company: item, maker: deducedMaker }); setCurrentView('select_minor');
+              }
+            }, (item) => ({ company: item, maker: draftRecord.maker, majorModel: draftRecord.majorModel }), true);
+          };
+
+          const renderSelectMaker = () => renderGenericMenu('揀車廠', Object.keys(busDatabase[draftRecord.company] || {}), (item) => {
+              setDraftRecord({ ...draftRecord, maker: item }); setCurrentView('select_minor');
+          }, (item) => ({ company: draftRecord.company, maker: item }));
+
+          const renderSelectMajor = () => renderGenericMenu('揀大車種', Object.keys(busDatabase[draftRecord.company]?.[draftRecord.maker] || {}), (item) => {
+              setDraftRecord({ ...draftRecord, majorModel: item }); setCurrentView('select_minor');
+          }, (item) => ({ company: draftRecord.company, maker: draftRecord.maker, majorModel: item }));
+
+          const renderSelectMinor = () => renderGenericMenu('揀細車種', getMinorsList(), (item) => {
+              const newRecord = { ...draftRecord, minorModel: item, model: item };
+              if (viewMode === 'company') newRecord.majorModel = deduceMajorFromMinor(draftRecord.company, draftRecord.maker, item);
+              setDraftRecord(newRecord); setFleetFilter('all'); setCurrentView('fleetNumber');
+          }, (item) => ({ company: draftRecord.company, maker: draftRecord.maker, majorModel: draftRecord.majorModel, minorModel: item }));
+
+          const renderFleetSelection = () => {
+            const allFleets = getFleetOptions();
+            const checkRidden = (f) => records.some(r => r.company === draftRecord.company && (r.minorModel || r.model) === draftRecord.minorModel && r.specificBus === f);
+            const displayFleets = fleetFilter === 'ridden' ? allFleets.filter(checkRidden) : fleetFilter === 'unridden' ? allFleets.filter(f => !checkRidden(f)) : allFleets;
+            return (
+              <div className="flex flex-col h-full bg-gray-50">
+                <div className={`p-4 shadow-md flex items-center gap-3 sticky top-0 z-10 ${theme.headerBg} ${theme.headerText}`}>
+                  <button onClick={goBack} className="p-2 -ml-2 rounded-full hover:bg-black/10 active:bg-black/20"><ArrowLeft size={24} /></button>
+                  <h1 className="text-xl font-bold">揀車輛</h1>
+                </div>
+                {allFleets.length === 0 ? (
+                  <div className="p-4"><div className="text-center p-6 bg-white border border-gray-200 rounded-xl shadow-sm"><p className="text-gray-500 mb-4">未有清單，請自行輸入</p><button onClick={() => { setDraftRecord({ ...draftRecord, specificBus: '' }); setCurrentView('details'); }} className={`${theme.bg} ${theme.text} font-bold py-3 px-4 rounded-xl w-full`}>手動輸入</button></div></div>
+                ) : (
+                  <>
+                    <div className="px-4 pt-4 pb-2">
+                      <div className="flex bg-gray-200/60 p-1 rounded-xl">
+                        <button onClick={() => setFleetFilter('all')} className={`flex-1 py-1.5 text-sm font-medium rounded-lg ${fleetFilter === 'all' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>全部</button>
+                        <button onClick={() => setFleetFilter('ridden')} className={`flex-1 py-1.5 text-sm font-medium rounded-lg flex items-center justify-center gap-1 ${fleetFilter === 'ridden' ? 'bg-white shadow text-green-700' : 'text-gray-500'}`}><CheckCircle size={14} /> 搭過</button>
+                        <button onClick={() => setFleetFilter('unridden')} className={`flex-1 py-1.5 text-sm font-medium rounded-lg flex items-center justify-center gap-1 ${fleetFilter === 'unridden' ? 'bg-white shadow text-red-700' : 'text-gray-500'}`}><XCircle size={14} /> 未搭</button>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 pt-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+                        {displayFleets.map(item => (
+                          <button key={item} onClick={() => { setDraftRecord({ ...draftRecord, specificBus: item }); setCurrentView('details'); }} className={`py-4 px-3 rounded-xl border-2 text-center font-bold text-lg active:scale-95 break-all ${checkRidden(item) ? 'bg-green-50 border-green-400 text-green-700' : 'bg-white border-red-300 text-red-700'}`}>{item}</button>
+                        ))}
+                      </div>
+                      <button onClick={() => { setDraftRecord({ ...draftRecord, specificBus: '' }); setCurrentView('details'); }} className="w-full bg-white border border-gray-300 p-4 rounded-xl shadow-sm flex justify-center items-center gap-2"><span className="text-lg font-medium text-gray-700">其他 (手動輸入)</span></button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          };
+
+          const renderDetails = () => {
+            const pastReviews = records.filter(r => r.company === draftRecord.company && (r.minorModel || r.model) === draftRecord.minorModel && r.specificBus && r.specificBus === draftRecord.specificBus).sort((a, b) => new Date(b.date) - new Date(a.date));
+            return (
+              <div className="flex flex-col h-full bg-gray-50">
+                <div className={`p-4 shadow-md flex items-center gap-3 sticky top-0 z-10 ${theme.headerBg} ${theme.headerText}`}>
+                  <button onClick={goBack} className="p-2 -ml-2 rounded-full hover:bg-black/10 active:bg-black/20"><ArrowLeft size={24} /></button>
+                  <h1 className="text-xl font-bold">確認紀錄與評語</h1>
+                </div>
+                <div className="p-5 space-y-5 flex-1 overflow-y-auto">
+                  <div className={`border p-4 rounded-xl flex flex-col gap-2 text-sm shadow-sm ${theme.lightBg} ${theme.border}`}>
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <span className={`font-bold px-2 py-1 rounded text-xs shadow-sm ${theme.badge}`}>{draftRecord.company}</span>
+                      <ChevronRight size={14} className="text-gray-500" />
+                      <span className="font-medium text-gray-800">{draftRecord.maker}</span>
+                      <ChevronRight size={14} className="text-gray-500" />
+                      <span className="font-bold text-gray-900">{draftRecord.minorModel}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1"><Hash size={16} /> 車輛 (編號/車牌)</label>
+                      <input type="text" value={draftRecord.specificBus || ''} onChange={(e) => setDraftRecord({ ...draftRecord, specificBus: e.target.value })} className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-gray-400 outline-none text-xl font-bold text-center bg-gray-50" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1"><Calendar size={16} /> 乘搭日期</label>
+                      <input type="date" value={draftRecord.date || ''} onChange={(e) => setDraftRecord({ ...draftRecord, date: e.target.value })} className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-gray-400 outline-none" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1"><MessageSquare size={16} /> 評語 (冷氣、性能等)</label>
+                      <textarea rows="3" placeholder="例如：冷氣好夠凍..." value={draftRecord.comment || ''} onChange={(e) => setDraftRecord({ ...draftRecord, comment: e.target.value })} className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-gray-400 outline-none resize-none" autoFocus />
+                    </div>
+                  </div>
+                  {pastReviews.length > 0 && (
+                    <div className="space-y-2 mt-4">
+                      <h3 className="text-sm font-bold text-gray-500 flex items-center gap-1 pl-1"><History size={16} /> 呢架車嘅過往評價 ({pastReviews.length})</h3>
+                      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden divide-y divide-gray-100">
+                        {pastReviews.map(pr => (
+                          <div key={pr.id} className="p-3 bg-gray-50/50">
+                            <span className="font-bold text-blue-600 text-sm mr-2">{formatShortDate(pr.date)} :</span>
+                            <span className="text-sm text-gray-800 break-words">{pr.comment || <span className="text-gray-400 italic">無填寫評語</span>}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="p-4 bg-white border-t border-gray-100 pb-8">
+                  <button onClick={handleSave} className={`w-full font-bold py-4 rounded-xl shadow-md flex justify-center items-center gap-2 active:opacity-80 transition-opacity ${theme.bg} ${theme.text}`}><Save size={24} /> 儲存紀錄</button>
+                </div>
+              </div>
+            );
+          };
+
+          const renderSettings = () => (
+            <div className="flex flex-col h-full bg-gray-50">
+              <div className="bg-gray-800 text-white p-4 shadow-md flex items-center gap-3 sticky top-0 z-10">
+                <button onClick={goBack} className="p-2 -ml-2 rounded-full hover:bg-gray-700 active:bg-gray-600"><ArrowLeft size={24} /></button>
+                <h1 className="text-xl font-bold text-yellow-400 flex items-center gap-2">㊙️ 秘密資料庫設定</h1>
+              </div>
+              <div className="p-5 space-y-6 flex-1 overflow-y-auto">
+                <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl text-blue-900 text-sm space-y-2">
+                  <h3 className="font-bold text-base flex items-center gap-1"><AlertTriangle size={18} /> Excel 格式要求</h3>
+                  <ol className="list-decimal pl-4 space-y-1">
+                    <li>A至F欄為：<strong>公司、車廠、大車種、細車種、編號、車牌(選填)</strong>。</li>
+                    <li>CTB、KMB等縮寫會自動被翻譯為中文。</li>
+                  </ol>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">CSV 連結：</label>
+                  <textarea rows="4" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition-all text-sm font-mono break-all" />
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => { localStorage.setItem('google_sheet_url', DEFAULT_SHEET_URL); setSheetUrl(DEFAULT_SHEET_URL); }} className="w-1/3 bg-gray-200 text-gray-800 font-bold py-4 rounded-xl active:bg-gray-300">還原預設</button>
+                  <button onClick={() => { localStorage.setItem('google_sheet_url', sheetUrl); fetchDatabase(sheetUrl); goBack(); }} className="w-2/3 bg-gray-800 text-white font-bold py-4 rounded-xl shadow-md flex justify-center items-center gap-2 active:bg-gray-900"><Save size={20} /> 儲存</button>
+                </div>
+              </div>
+            </div>
+          );
+
+          const renderList = () => (
+            <div className="flex flex-col h-full bg-gray-50 pb-6">
+              <div className="bg-blue-600 text-white p-4 shadow-md flex justify-between items-center sticky top-0 z-10">
+                <div className="flex items-center gap-2">
+                  <button onClick={goBack} className="p-1.5 -ml-1.5 rounded-full hover:bg-blue-700 active:bg-blue-800"><ArrowLeft size={24} /></button>
+                  <h1 className="text-xl font-bold">歷史紀錄</h1>
+                </div>
+                <span className="bg-blue-800 px-3 py-1 rounded-full text-sm font-medium">共 {records.length} 條</span>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {records.length === 0 ? (
+                  <div className="text-center text-gray-500 mt-20"><Bus size={64} className="text-gray-300 mb-4 mx-auto" /><p>未有任何紀錄</p></div>
+                ) : (
+                  records.map(record => {
+                    const companyStyle = COMPANY_STYLES[record.company] || COMPANY_STYLES["預設"];
+                    return (
+                    <div key={record.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-2 relative overflow-hidden">
+                      <div className={`absolute top-0 left-0 w-1.5 h-full ${companyStyle.bg}`}></div>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`font-bold text-xs px-2 py-0.5 rounded shadow-sm ${companyStyle.badge}`}>{record.company}</span>
+                            <span className="text-gray-900 font-bold text-lg">{record.specificBus}</span>
+                          </div>
+                          <div className="text-sm text-gray-500 flex items-center gap-1 mb-1 flex-wrap">
+                            <span className="bg-gray-100 px-2 py-0.5 rounded">{record.maker}</span>
+                            {record.majorModel && <><ChevronRight size={14} className="text-gray-400" /><span className="bg-gray-100 px-2 py-0.5 rounded">{record.majorModel}</span></>}
+                            <ChevronRight size={14} className="text-gray-400" />
+                            <span className="bg-gray-100 px-2 py-0.5 rounded font-medium">{record.minorModel || record.model}</span>
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500 flex items-center gap-1 bg-gray-50 border border-gray-200 px-2 py-1 rounded-lg"><Calendar size={12} />{record.date}</div>
+                      </div>
+                      {record.comment && (
+                        <div className="mt-2 text-sm text-gray-700 bg-gray-50 p-3 rounded-lg border border-gray-100 flex gap-2 items-start">
+                          <MessageSquare size={16} className="text-gray-400 shrink-0 mt-0.5" />
+                          <p className="leading-relaxed whitespace-pre-wrap">{record.comment}</p>
+                        </div>
+                      )}
+                    </div>
+                  )})
+                )}
+              </div>
+            </div>
+          );
+
+          return (
+            <div className="h-full w-full max-w-md mx-auto bg-gray-50 overflow-hidden shadow-2xl relative font-sans">
+              {currentView === 'home' && renderHome()}
+              {currentView === 'select_company' && renderSelectCompany()}
+              {currentView === 'select_maker' && renderSelectMaker()}
+              {currentView === 'select_major' && renderSelectMajor()}
+              {currentView === 'select_minor' && renderSelectMinor()}
+              {currentView === 'fleetNumber' && renderFleetSelection()}
+              {currentView === 'details' && renderDetails()}
+              {currentView === 'list' && renderList()}
+              {currentView === 'settings' && renderSettings()}
+            </div>
+          );
+        }
+
+
+        // ==========================================
+        // App 2: 巴士客量統計 (Bus Counter App)
+        // ==========================================
+        function BusCounterApp({ onBack }) {
+            const [company, setCompany] = useState('KMB');
+            const [routeNumber, setRouteNumber] = useState('');
+            const [currentStopIndex, setCurrentStopIndex] = useState(0); 
+            const [tripInfo, setTripInfo] = useState({ plate: '', captainId: '', captainName: '' });
+            const [activeVariant, setActiveVariant] = useState(null);
+            const [tripRecorded, setTripRecorded] = useState(false);
+            const [initialPassengers, setInitialPassengers] = useState(0);
+            const [totalPassengers, setTotalPassengers] = useState(0);
+            const [stopOn, setStopOn] = useState(0);
+            const [stopOff, setStopOff] = useState(0);
+            const [arrivalTime, setArrivalTime] = useState('');
+            const [currentNote, setCurrentNote] = useState('');
+            const [showNoteInput, setShowNoteInput] = useState(false);
+            const [includeNotesInReport, setIncludeNotesInReport] = useState(true);
+            const [includeAnalysis, setIncludeAnalysis] = useState(true);
+            const [showTotalPatronage, setShowTotalPatronage] = useState(true); 
+            const [statsTab, setStatsTab] = useState('monthly');
+            const [history, setHistory] = useState([]);
+            const [showReport, setShowReport] = useState(false);
+            const [showTripSettings, setShowTripSettings] = useState(false);
+            const [showStopSelector, setShowStopSelector] = useState(false);
+            const [showResetConfirm, setShowResetConfirm] = useState(false);
+            const [showNegativeCorrection, setShowNegativeCorrection] = useState(false); 
+            const [negativeDeficit, setNegativeDeficit] = useState(0); 
+            const [copied, setCopied] = useState(false);
+            const [showStats, setShowStats] = useState(false); 
+            const [durationFormat, setDurationFormat] = useState('min'); 
+            const [editingValue, setEditingValue] = useState(null); 
+            const [manualInputMode, setManualInputMode] = useState('direct_base'); 
+            const [manualInputValue, setManualInputValue] = useState('');
+            const [editingHistoryIndex, setEditingHistoryIndex] = useState(null);
+            const [historyEditValues, setHistoryEditValues] = useState({ on: 0, off: 0, note: '', time: '' });
+            const [isLoading, setIsLoading] = useState(false);
+            const [variants, setVariants] = useState([]); 
+            const [showVariantSelector, setShowVariantSelector] = useState(false);
+            const [routeStops, setRouteStops] = useState([]); 
+            const [apiError, setApiError] = useState(null);
+            const [statsData, setStatsData] = useState({ yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: Date.now() });
+            const isLoaded = useRef(false);
+
+            const formatTime24 = (date = new Date()) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+            const cleanStopName = (name) => {
+                if (!name) return '';
+                let cleaned = name.replace(/[\(（]([^\u4e00-\u9fa5]+?)[\)）]/g, '').trim();
+                return cleaned.split(/,|，/)[0].trim();
+            };
+            const calculateDurationMinutes = (startStr, endStr) => {
+                if (!startStr || !endStr || startStr === '-' || endStr === '-') return 0;
+                const [h1, m1] = startStr.split(':').map(Number);
+                const [h2, m2] = endStr.split(':').map(Number);
+                let minutes = (h2 * 60 + m2) - (h1 * 60 + m1);
+                if (minutes < 0) minutes += 24 * 60; 
+                return minutes;
+            };
+
+            useEffect(() => {
+                const savedStats = localStorage.getItem('busCounterStats');
+                if (savedStats) {
+                    try {
+                        let parsed = JSON.parse(savedStats);
+                        parsed = checkAndResetStats(parsed);
+                        setStatsData(parsed);
+                    } catch (e) { console.error("Failed to load stats", e); }
+                }
+                const savedSession = localStorage.getItem('busCounterCurrentSession');
+                if (savedSession) {
+                    try {
+                        const session = JSON.parse(savedSession);
+                        setCompany(session.company || 'KMB'); setRouteNumber(session.routeNumber || ''); setCurrentStopIndex(session.currentStopIndex || 0);
+                        setTripInfo(session.tripInfo || { plate: '', captainId: '', captainName: '' }); setActiveVariant(session.activeVariant || null);
+                        setTripRecorded(session.tripRecorded || false); setInitialPassengers(session.initialPassengers || 0); setTotalPassengers(session.totalPassengers || 0);
+                        setStopOn(session.stopOn || 0); setStopOff(session.stopOff || 0); setArrivalTime(session.arrivalTime || '');
+                        setHistory(session.history || []); setRouteStops(session.routeStops || []); setCurrentNote(session.currentNote || '');
+                        setIncludeNotesInReport(session.includeNotesInReport ?? true); setIncludeAnalysis(session.includeAnalysis ?? true);
+                        setShowTotalPatronage(session.showTotalPatronage ?? true); setStatsTab(session.statsTab || 'monthly');
+                    } catch (e) {}
+                }
+                isLoaded.current = true;
+            }, []);
+
+            useEffect(() => {
+                if (!isLoaded.current) return;
+                const sessionData = {
+                    company, routeNumber, currentStopIndex, tripInfo, activeVariant, tripRecorded, initialPassengers, totalPassengers, stopOn, stopOff, arrivalTime, history, routeStops, currentNote, includeNotesInReport, includeAnalysis, showTotalPatronage, statsTab
+                };
+                localStorage.setItem('busCounterCurrentSession', JSON.stringify(sessionData));
+            }, [company, routeNumber, currentStopIndex, tripInfo, activeVariant, tripRecorded, initialPassengers, totalPassengers, stopOn, stopOff, arrivalTime, history, routeStops, currentNote, includeNotesInReport, includeAnalysis, showTotalPatronage, statsTab]);
+
+            const checkAndResetStats = (data) => {
+                if (!data.lastSaveTime) return data;
+                if (!data.yearly) data = { yearly: { trips: data.trips || {}, total: data.total || 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: data.lastSaveTime };
+                const lastSaveDate = new Date(data.lastSaveTime);
+                const now = new Date();
+                let yearlyResetThreshold = new Date(now.getFullYear(), 0, 1, 2, 0, 0); 
+                if (now < yearlyResetThreshold) yearlyResetThreshold = new Date(now.getFullYear() - 1, 0, 1, 2, 0, 0);
+                let monthlyResetThreshold = new Date(now.getFullYear(), now.getMonth(), 1, 2, 0, 0);
+                if (now < monthlyResetThreshold) monthlyResetThreshold = new Date(now.getFullYear(), now.getMonth() - 1, 1, 2, 0, 0);
+                let newData = { ...data }; let modified = false;
+                if (lastSaveDate < yearlyResetThreshold) { newData.yearly = { trips: {}, total: 0 }; newData.monthly = { trips: {}, total: 0 }; modified = true; }
+                else if (lastSaveDate < monthlyResetThreshold) { newData.monthly = { trips: {}, total: 0 }; modified = true; }
+                if (modified) { newData.lastSaveTime = Date.now(); localStorage.setItem('busCounterStats', JSON.stringify(newData)); }
+                return newData;
+            };
+
+            const saveTripToStats = () => {
+                if (tripRecorded || !activeVariant) return; 
+                const newData = { ...statsData };
+                const key = `${activeVariant.company}-${activeVariant.route}-${activeVariant.description}`;
+                if (!newData.yearly.trips[key]) newData.yearly.trips[key] = { company: activeVariant.company, route: activeVariant.route, desc: activeVariant.description, count: 0 };
+                newData.yearly.trips[key].count += 1; newData.yearly.total += 1;
+                if (!newData.monthly.trips[key]) newData.monthly.trips[key] = { company: activeVariant.company, route: activeVariant.route, desc: activeVariant.description, count: 0 };
+                newData.monthly.trips[key].count += 1; newData.monthly.total += 1;
+                newData.lastSaveTime = Date.now();
+                setStatsData(newData); localStorage.setItem('busCounterStats', JSON.stringify(newData)); setTripRecorded(true); 
+            };
+
+            const manualClearStats = () => {
+                if (window.confirm('確定要清空所有統計資料嗎？此動作無法復原。')) {
+                    const empty = { yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: Date.now() };
+                    setStatsData(empty); localStorage.setItem('busCounterStats', JSON.stringify(empty));
+                }
+            };
+
+            const recalculateAll = (baseCount, currentHistory = history, currentOn = stopOn, currentOff = stopOff) => {
+                let runningTotal = baseCount;
+                const newHistory = currentHistory.map(record => {
+                    if (record.isSeparator) return record;
+                    runningTotal = runningTotal + record.on - record.off;
+                    return { ...record, occupancy: runningTotal };
+                });
+                setHistory(newHistory); setInitialPassengers(baseCount);
+                setTotalPassengers(runningTotal + currentOn - currentOff);
+            };
+
+            const checkForNegativeDeficit = () => {
+                const lowestHistoryOccupancy = history.reduce((min, r) => r.isSeparator ? min : Math.min(min, r.occupancy), Infinity); 
+                return Math.max(0, -Math.min(lowestHistoryOccupancy, totalPassengers));
+            };
+            
+            const handleCorrection = () => {
+                recalculateAll(initialPassengers + negativeDeficit);
+                setNegativeDeficit(0); setShowNegativeCorrection(false); setShowReport(true);
+            };
+
+            const handleShowReport = () => {
+                const deficit = checkForNegativeDeficit();
+                if (deficit > 0) { setNegativeDeficit(deficit); setShowNegativeCorrection(true); } 
+                else { setShowReport(true); }
+            };
+
+            const getAnalysisData = () => {
+                let combinedData = history.filter(r => !r.isSeparator);
+                if (routeStops.length > 0 && currentStopIndex < routeStops.length) {
+                     if (stopOn > 0 || stopOff > 0 || arrivalTime || currentNote) {
+                         combinedData = [...combinedData, { stopName: routeStops[currentStopIndex].name, on: stopOn, off: stopOff, occupancy: totalPassengers, note: currentNote, isLive: true }];
+                     }
+                }
+                if (combinedData.length === 0) return null;
+                let maxOnVal = 0, maxOccVal = 0, maxOffVal = 0; 
+                combinedData.forEach(r => {
+                    if (r.on > maxOnVal) maxOnVal = r.on; if (r.occupancy > maxOccVal) maxOccVal = r.occupancy; if (r.off > maxOffVal) maxOffVal = r.off;
+                });
+                const maxOnStops = combinedData.filter(r => r.on === maxOnVal && maxOnVal > 0);
+                const maxOffStops = combinedData.filter(r => r.off === maxOffVal && maxOffVal > 0);
+                const rawSegments = [];
+                combinedData.forEach((r, idx) => {
+                    if (r.occupancy === maxOccVal && maxOccVal > 0) {
+                        let toStopName = null;
+                        if (idx + 1 < combinedData.length) toStopName = cleanStopName(combinedData[idx + 1].stopName);
+                        else if (r.isLive && currentStopIndex + 1 < routeStops.length) toStopName = routeStops[currentStopIndex + 1].name;
+                        else toStopName = "報告完結";
+                        rawSegments.push({ from: cleanStopName(r.stopName), to: toStopName, val: r.occupancy });
+                    }
+                });
+                const mergedSegments = [];
+                if (rawSegments.length > 0) {
+                    let currentSeg = { ...rawSegments[0] };
+                    for (let i = 1; i < rawSegments.length; i++) {
+                        if (currentSeg.to === rawSegments[i].from && currentSeg.to !== "報告完結") currentSeg.to = rawSegments[i].to; 
+                        else { mergedSegments.push(currentSeg); currentSeg = { ...rawSegments[i] }; }
+                    }
+                    mergedSegments.push(currentSeg);
+                }
+                const formattedSegments = mergedSegments.map(seg => seg.to === "報告完結" || seg.to === null ? `${seg.from} (報告完結站)` : `${seg.from} - ${seg.to} 段`);
+                return { maxOnVal, maxOccVal, maxOffVal, maxOnStops, maxOffStops, formattedSegments };
+            };
+
+            const getCompanyColor = (comp) => comp === 'KMB' ? 'bg-red-600 border-red-700 text-white' : comp === 'CTB' ? 'bg-yellow-400 border-yellow-500 text-black' : comp === 'NLB' ? 'bg-teal-600 border-teal-700 text-white' : 'bg-gray-400 border-gray-500 text-white';
+            const toggleCompany = () => setCompany(prev => prev === 'KMB' ? 'CTB' : prev === 'CTB' ? 'NLB' : 'KMB');
+
+            const searchRoute = async () => {
+                if (!routeNumber) return;
+                setIsLoading(true); setApiError(null); setVariants([]); setShowVariantSelector(false); setActiveVariant(null); 
+                try {
+                    if (company === 'KMB') {
+                        const response = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route/`);
+                        const data = await response.json();
+                        if (data.data) {
+                            const filteredRoutes = data.data.filter(r => r.route.toUpperCase() === routeNumber.toUpperCase());
+                            if (filteredRoutes.length > 0) {
+                                const routeVariants = filteredRoutes.map(r => ({ company: 'KMB', route: r.route, bound: r.bound, serviceType: r.service_type, orig: r.orig_tc, dest: r.dest_tc, description: `往 ${r.dest_tc}`, subDescription: `由 ${r.orig_tc} 開出`, tag: r.service_type === '1' ? '日常班次' : `特別班次 (${r.service_type})` }));
+                                routeVariants.sort((a, b) => a.serviceType - b.serviceType); setVariants(routeVariants); setShowVariantSelector(true);
+                            } else setApiError(`找不到路線 ${routeNumber}`);
+                        } else setApiError("API 連線錯誤");
+                    } else if (company === 'CTB') {
+                        const response = await fetch(`https://rt.data.gov.hk/v2/transport/citybus/route/CTB/${routeNumber.toUpperCase()}`);
+                        const data = await response.json();
+                        if (data.data) {
+                            const r = Array.isArray(data.data) ? data.data : [data.data];
+                            let ctbVariants = [];
+                            r.forEach(routeObj => {
+                                ctbVariants.push({ company: 'CTB', route: routeObj.route, dir: 'outbound', orig: routeObj.orig_tc, dest: routeObj.dest_tc, description: `往 ${routeObj.dest_tc} (去程)`, subDescription: `由 ${routeObj.orig_tc} 開出`, tag: '去程' });
+                                ctbVariants.push({ company: 'CTB', route: routeObj.route, dir: 'inbound', orig: routeObj.dest_tc, dest: routeObj.orig_tc, description: `往 ${routeObj.orig_tc} (回程)`, subDescription: `由 ${routeObj.dest_tc} 開出`, tag: '回程' });
+                            });
+                            setVariants(ctbVariants); setShowVariantSelector(true);
+                        } else setApiError(`找不到路線 ${routeNumber}`);
+                    } else if (company === 'NLB') {
+                        const response = await fetch(`https://rt.data.gov.hk/v2/transport/nlb/route.php?action=list`);
+                        const data = await response.json();
+                        if (data && data.routes) {
+                            const filteredRoutes = data.routes.filter(r => r.routeNo.toUpperCase() === routeNumber.toUpperCase());
+                            if (filteredRoutes.length > 0) {
+                                const nlbVariants = filteredRoutes.map(r => ({ company: 'NLB', route: r.routeNo, routeId: r.routeId, description: r.routeName_c, subDescription: r.routeName_e, tag: '嶼巴' }));
+                                setVariants(nlbVariants); setShowVariantSelector(true);
+                            } else setApiError(`找不到路線 ${routeNumber}`);
+                        } else setApiError("API 連線錯誤");
+                    }
+                } catch (err) { setApiError("API 連線錯誤"); } finally { setIsLoading(false); }
+            };
+
+            const selectVariant = async (variant) => {
+                setIsLoading(true); setShowVariantSelector(false); setApiError(null); setRouteStops([]); setActiveVariant(variant); 
+                try {
+                    let fullStopsData = [];
+                    if (variant.company === 'KMB') {
+                        const stopListRes = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route-stop/${variant.route}/${variant.bound === 'O' ? 'outbound' : 'inbound'}/${variant.serviceType}`);
+                        const stopListData = await stopListRes.json();
+                        if (!stopListData.data || stopListData.data.length === 0) throw new Error("無站點資料");
+                        fullStopsData = await Promise.all(stopListData.data.map(async (s) => {
+                            try { const detailRes = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/stop/${s.stop}`); const detailData = await detailRes.json(); return { seq: s.seq, id: s.stop, name: detailData.data.name_tc }; } 
+                            catch { return { seq: s.seq, id: s.stop, name: "未知站點" }; }
+                        }));
+                        fullStopsData.sort((a, b) => parseInt(a.seq) - parseInt(b.seq));
+                    } else if (variant.company === 'CTB') {
+                        const stopListRes = await fetch(`https://rt.data.gov.hk/v2/transport/citybus/route-stop/CTB/${variant.route}/${variant.dir}`);
+                        const stopListData = await stopListRes.json();
+                        if (!stopListData.data || stopListData.data.length === 0) throw new Error("無站點資料");
+                        fullStopsData = await Promise.all(stopListData.data.map(async (s) => {
+                            try { const detailRes = await fetch(`https://rt.data.gov.hk/v2/transport/citybus/stop/${s.stop}`); const detailData = await detailRes.json(); return { seq: s.seq, id: s.stop, name: detailData.data.name_tc }; } 
+                            catch { return { seq: s.seq, id: s.stop, name: "未知站點" }; }
+                        }));
+                        fullStopsData.sort((a, b) => parseInt(a.seq) - parseInt(b.seq));
+                    } else if (variant.company === 'NLB') {
+                        const stopListRes = await fetch(`https://rt.data.gov.hk/v2/transport/nlb/stop.php?action=list&routeId=${variant.routeId}`);
+                        const stopListData = await stopListRes.json();
+                        if (!stopListData.stops || stopListData.stops.length === 0) throw new Error("無站點資料");
+                        fullStopsData = stopListData.stops.map((s, index) => ({ seq: index + 1, id: s.stopId, name: s.stopName_c }));
+                    }
+                    setRouteStops(fullStopsData);
+                    if (fullStopsData.length === 0 && history.length === 0) resetCounter();
+                    else { setCurrentStopIndex(0); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); }
+                    setShowTripSettings(true); 
+                } catch (err) { setApiError(err.message || "加載站點失敗"); } finally { setIsLoading(false); }
+            };
+
+            const resetCounter = () => {
+                setCurrentStopIndex(0); setInitialPassengers(0); setTotalPassengers(0); setStopOn(0); setStopOff(0); setArrivalTime('');
+                setHistory([]); setNegativeDeficit(0); setShowNegativeCorrection(false); setTripRecorded(false); setCurrentNote(''); 
+            };
+            const openResetConfirm = () => setShowResetConfirm(true);
+            const performHardReset = () => {
+                resetCounter(); setRouteStops([]); setRouteNumber(''); setVariants([]); setTripInfo({ plate: '', captainId: '', captainName: '' });
+                setActiveVariant(null); setApiError(null); setShowReport(false); setShowResetConfirm(false); localStorage.removeItem('busCounterCurrentSession');
+            };
+            const handleFinishAndReset = () => { copyReport(); saveTripToStats(); performHardReset(); };
+            const setArrivalNow = () => setArrivalTime(formatTime24());
+            const jumpToStop = (index) => { setCurrentStopIndex(index); setStopOn(0); setStopOff(0); setArrivalTime(''); setShowStopSelector(false); setCurrentNote(''); };
+
+            const openManualInput = (type) => {
+                setEditingValue(type);
+                if (type === 'initial') { setManualInputMode('direct_base'); setManualInputValue(initialPassengers.toString()); }
+                else if (type === 'on') { setManualInputValue(stopOn.toString()); }
+                else if (type === 'off') { setManualInputValue(stopOff.toString()); }
+            };
+            const saveManualInput = () => {
+                const val = parseInt(manualInputValue) || 0;
+                if (editingValue === 'initial') {
+                    if (manualInputMode === 'direct_base') recalculateAll(val);
+                    else { const currentNetChange = totalPassengers - initialPassengers; recalculateAll(val - currentNetChange); }
+                } else if (editingValue === 'on') { const diff = val - stopOn; setStopOn(val); setTotalPassengers(prev => prev + diff); } 
+                else if (editingValue === 'off') { const diff = val - stopOff; setStopOff(val); setTotalPassengers(prev => prev - diff); }
+                setEditingValue(null);
+            };
+
+            const openHistoryEdit = (index) => {
+                const record = history[index];
+                if (record.isSeparator) return; 
+                setHistoryEditValues({ on: record.on, off: record.off, note: record.note || '', time: record.arrivalTime === '-' ? '' : record.arrivalTime });
+                setEditingHistoryIndex(index);
+            };
+            const saveHistoryEdit = () => {
+                if (editingHistoryIndex === null) return;
+                const updatedHistory = [...history];
+                updatedHistory[editingHistoryIndex] = { ...updatedHistory[editingHistoryIndex], on: parseInt(historyEditValues.on) || 0, off: parseInt(historyEditValues.off) || 0, note: historyEditValues.note, arrivalTime: historyEditValues.time || '-' };
+                recalculateAll(initialPassengers, updatedHistory); setEditingHistoryIndex(null);
+            };
+
+            const handleNextStop = () => {
+                if (routeStops.length > 0 && currentStopIndex === routeStops.length - 1) saveTripToStats();
+                if (routeStops.length > 0 && currentStopIndex >= routeStops.length) return;
+                const currentStopName = routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`;
+                setHistory([...history, { stopNumber: currentStopIndex + 1, stopName: currentStopName, arrivalTime: arrivalTime || '-', on: stopOn, off: stopOff, occupancy: totalPassengers, timestamp: formatTime24(), note: currentNote }]);
+                setCurrentStopIndex(prev => prev + 1); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); 
+            };
+            const handleCompleteAndShowReport = () => {
+                saveTripToStats();
+                const currentStopName = routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`;
+                setHistory([...history, { stopNumber: currentStopIndex + 1, stopName: currentStopName, arrivalTime: arrivalTime || '-', on: stopOn, off: stopOff, occupancy: totalPassengers, timestamp: formatTime24(), note: currentNote }]);
+                setCurrentStopIndex(prev => prev + 1); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote('');
+                setShowReport(true);
+            };
+            const handlePrevStop = () => {
+                if (currentStopIndex === 0) return;
+                const newHistory = [...history]; let lastRecord = newHistory.pop();
+                if (lastRecord && lastRecord.isSeparator && newHistory.length > 0) lastRecord = newHistory.pop();
+                setCurrentStopIndex(prev => prev - 1);
+                let targetOn = 0, targetOff = 0;
+                if (lastRecord && !lastRecord.isSeparator) {
+                    targetOn = lastRecord.on || 0; targetOff = lastRecord.off || 0;
+                    setStopOn(targetOn); setStopOff(targetOff); setArrivalTime(lastRecord.arrivalTime === '-' ? '' : lastRecord.arrivalTime); setCurrentNote(lastRecord.note || '');
+                } else { setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); }
+                setHistory(newHistory); recalculateAll(initialPassengers, newHistory, targetOn, targetOff);
+            };
+            const handleContinueTrip = () => {
+                const currentStopName = routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`;
+                setHistory([...history, { stopNumber: currentStopIndex + 1, stopName: currentStopName, arrivalTime: arrivalTime || '-', on: stopOn, off: stopOff, occupancy: totalPassengers, timestamp: formatTime24(), note: currentNote || '繼續/合併行程' }, { isSeparator: true, stopName: '--- 繼續行程 ---', arrivalTime: '-', on: 0, off: 0, occupancy: totalPassengers, note: '' }]);
+                setCurrentStopIndex(0); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); setRouteStops([]); setActiveVariant(null); setShowVariantSelector(true);
+            };
+
+            const incrementOn = () => { setStopOn(s => s + 1); setTotalPassengers(t => t + 1); };
+            const decrementOn = () => { if (stopOn > 0) { setStopOn(s => s - 1); setTotalPassengers(t => t - 1); }};
+            const incrementOff = () => { setStopOff(s => s + 1); setTotalPassengers(t => t - 1); };
+            const decrementOff = () => { if (stopOff > 0) { setStopOff(s => s - 1); setTotalPassengers(t => t + 1); }};
+
+            const getTripDuration = () => {
+                if (history.length === 0) return 0;
+                const start = history[0].arrivalTime; let end = arrivalTime;
+                for (let i = history.length - 1; i >= 0; i--) { if (!history[i].isSeparator && history[i].arrivalTime !== '-') { if (!end) end = history[i].arrivalTime; break; } }
+                if (arrivalTime && currentStopIndex < routeStops.length) end = arrivalTime; 
+                return calculateDurationMinutes(start, end);
+            };
+            const formatDuration = (mins) => durationFormat === 'min' ? `${mins} 分鐘` : (Math.floor(mins / 60) > 0 ? `${Math.floor(mins / 60)}小時${mins % 60}分鐘` : `${mins % 60}分鐘`);
+            const getTotalPatronage = () => { let total = initialPassengers; history.forEach(r => { if(!r.isSeparator) total += r.on; }); if (routeStops.length === 0 || currentStopIndex < routeStops.length) total += stopOn; return total; };
+
+            const exportToExcel = () => {
+                const duration = getTripDuration(); const dateStr = new Date().toLocaleDateString(); const filename = `BusReport_${routeNumber || 'Route'}_${dateStr.replace(/\//g, '-')}.xlsx`;
+                const analysisData = getAnalysisData(); const totalPatronage = getTotalPatronage();
+                const wsData = [
+                    ["巴士客量統計報告"], ["日期", dateStr], ["路線", `${company} ${routeNumber || '-'}`], ["車牌/車隊編號", tripInfo.plate || '-'], ["車長", `${tripInfo.captainId || '-'} ${tripInfo.captainName || ''}`], ["總行車時間", formatDuration(duration)], ["初始人數", initialPassengers], []
+                ];
+                if (includeAnalysis && analysisData && (analysisData.maxOnVal > 0 || analysisData.maxOccVal > 0)) {
+                    wsData.push(["*** 重點客量分析 ***"]);
+                    if (analysisData.maxOnStops.length > 0) wsData.push(["最多人上車", `${analysisData.maxOnStops.map(s => cleanStopName(s.stopName)).join(", ")} (${analysisData.maxOnVal}人)`]);
+                    if (analysisData.maxOffStops.length > 0) wsData.push(["最多人落車", `${analysisData.maxOffStops.map(s => cleanStopName(s.stopName)).join(", ")} (${analysisData.maxOffVal}人)`]);
+                    if (analysisData.formattedSegments.length > 0) wsData.push(["最高載客路段", `${analysisData.formattedSegments.join(", ")} (${analysisData.maxOccVal}人)`]);
+                    wsData.push([]); 
+                }
+                wsData.push(["時間", "站名", "上", "落", "車上", "備註"]);
+                history.forEach(record => {
+                    if (record.isSeparator) wsData.push(["--- 繼續行程 ---", "", "", "", "", ""]);
+                    else wsData.push([record.arrivalTime === '-' ? '--:--' : record.arrivalTime, cleanStopName(record.stopName), record.on, record.off, record.occupancy, record.note || '']);
+                });
+                if (routeStops.length === 0 || currentStopIndex < routeStops.length) {
+                    if (stopOn > 0 || stopOff > 0 || arrivalTime || currentNote) {
+                         wsData.push([arrivalTime || '--:--', cleanStopName(routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`), stopOn, stopOff, totalPassengers, currentNote || '']);
+                    }
+                }
+                wsData.push([]);
+                if (showTotalPatronage) wsData.push(["總客量", totalPatronage]);
+                const ws = XLSX.utils.aoa_to_sheet(wsData);
+                ws['!cols'] = [{ wch: 10 }, { wch: 25 }, { wch: 5 }, { wch: 5 }, { wch: 8 }, { wch: 20 }];
+                const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Report"); XLSX.writeFile(wb, filename);
+            };
+
+            const copyReport = () => {
+                if (currentStopIndex >= routeStops.length - 1) saveTripToStats();
+                const analysisData = getAnalysisData();
+                let text = `巴士客量統計報告\n================================\n日期: ${new Date().toLocaleDateString()}\n路線: ${company} ${routeNumber || '-'}\n車牌/車隊編號: ${tripInfo.plate || '-'}\n車長: ${tripInfo.captainId || '-'} ${tripInfo.captainName || ''}\n總行車時間: ${formatDuration(getTripDuration())}\n初始: ${initialPassengers} 人\n\n`;
+                if (includeAnalysis && analysisData && (analysisData.maxOnVal > 0 || analysisData.maxOccVal > 0)) {
+                    text += `*** 重點客量分析 ***\n`;
+                    if (analysisData.maxOnStops.length > 0) text += `🔥 最多人上車: ${analysisData.maxOnStops.map(s => cleanStopName(s.stopName)).join(", ")} (+${analysisData.maxOnVal})\n`;
+                    if (analysisData.maxOffStops.length > 0) text += `📉 最多人落車: ${analysisData.maxOffStops.map(s => cleanStopName(s.stopName)).join(", ")} (-${analysisData.maxOffVal})\n`;
+                    if (analysisData.formattedSegments.length > 0) text += `🚌 最高載客路段: ${analysisData.formattedSegments.join(", ")} (${analysisData.maxOccVal})\n`;
+                    text += `\n`;
+                }
+                text += `時間   | 站名           | 上  | 落  | 車上${includeNotesInReport ? ' | 備註' : ''}\n`;
+                text += includeNotesInReport ? `----------------------------------------------------\n` : `---------------------------------------------\n`;
+                history.forEach(record => {
+                    if (record.isSeparator) { text += `--- 繼續行程 / 轉頁 ---\n`; return; }
+                    let line = `${(record.arrivalTime === '-' ? '--:--' : record.arrivalTime).padEnd(6)} | ${cleanStopName(record.stopName).padEnd(12)} | +${record.on.toString().padEnd(2)} | -${record.off.toString().padEnd(2)} | ${record.occupancy < 0 ? `(${record.occupancy})` : record.occupancy}`;
+                    if (includeNotesInReport) line += ` | ${record.note || ''}`;
+                    text += line + `\n`;
+                });
+                if (routeStops.length === 0 || currentStopIndex < routeStops.length) {
+                    if (stopOn > 0 || stopOff > 0 || arrivalTime || currentNote) {
+                        let line = `${(arrivalTime || '--:--').padEnd(6)} | ${cleanStopName(routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`).padEnd(12)} | +${stopOn.toString().padEnd(2)} | -${stopOff.toString().padEnd(2)} | ${totalPassengers < 0 ? `(${totalPassengers})` : totalPassengers}`;
+                        if (includeNotesInReport) line += ` | ${currentNote || ''}`;
+                        text += line + `\n`;
+                    }
+                }
+                if (showTotalPatronage) text += `\n總客量: ${getTotalPatronage()}\n`;
+                text += `由 BusCounter 生成`;
+                
+                if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => { }); } 
+                else {
+                     const textArea = document.createElement("textarea"); textArea.value = text; document.body.appendChild(textArea); textArea.select();
+                     try { document.execCommand('copy'); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (err) {} document.body.removeChild(textArea);
+                }
+            };
+
+            const getCurrentStopDisplay = () => routeStops.length > 0 ? (currentStopIndex < routeStops.length ? routeStops[currentStopIndex].name : "行程結束 (End)") : `第 ${currentStopIndex + 1} 站`;
+            const getNextStopDisplay = () => routeStops.length > 0 ? (currentStopIndex < routeStops.length - 1 ? `下一站: ${routeStops[currentStopIndex + 1].name}` : currentStopIndex === routeStops.length - 1 ? "總站 (記錄並結束)" : "行程已結束") : "前往下一站";
+            const getPrevStopDisplay = () => (currentStopIndex > 0 && routeStops.length > 0) ? `上一站: ${routeStops[currentStopIndex - 1].name}` : "上一站: 起點";
+            const isLastStop = routeStops.length > 0 && currentStopIndex === routeStops.length - 1;
+
+            if (showStats) {
+                const yearlyKeys = Object.keys(statsData.yearly?.trips || {}).sort((a, b) => statsData.yearly.trips[b].count - statsData.yearly.trips[a].count);
+                const monthlyKeys = Object.keys(statsData.monthly?.trips || {}).sort((a, b) => statsData.monthly.trips[b].count - statsData.monthly.trips[a].count);
+                return (
+                    <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-900 relative">
+                        <header className="bg-white border-b p-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+                            <h2 className="text-xl font-bold flex items-center gap-2"><BarChart3 className="w-6 h-6 text-purple-600" /> 行程統計</h2>
+                            <button onClick={() => setShowStats(false)} className="text-purple-600 font-medium">返回</button>
+                        </header>
+                        <div className="px-4 pt-4">
+                            <div className="flex bg-gray-200 rounded-lg p-1">
+                                <button onClick={() => setStatsTab('monthly')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-all ${statsTab === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>月度統計</button>
+                                <button onClick={() => setStatsTab('yearly')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-all ${statsTab === 'yearly' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>年度統計</button>
+                            </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                            {statsTab === 'monthly' ? (
+                                <div className="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-6 text-white shadow-md relative overflow-hidden transition-all">
+                                    <div className="relative z-10">
+                                        <div className="text-sm font-medium opacity-80 mb-1 flex items-center gap-1"><Calendar className="w-4 h-4"/> 本月行程 ({new Date().getMonth() + 1}月)</div>
+                                        <div className="text-4xl font-bold">{statsData.monthly?.total || 0} <span className="text-lg font-normal opacity-80">次</span></div>
+                                    </div>
+                                    <BarChart3 className="absolute right-[-10px] bottom-[-10px] w-24 h-24 text-white opacity-20" />
+                                </div>
+                            ) : (
+                                <div className="bg-gradient-to-br from-purple-600 to-indigo-600 rounded-xl p-6 text-white shadow-md relative overflow-hidden transition-all">
+                                    <div className="relative z-10">
+                                        <div className="text-sm font-medium opacity-80 mb-1 flex items-center gap-1"><TrendingUp className="w-4 h-4"/> 本年度行程</div>
+                                        <div className="text-4xl font-bold">{statsData.yearly?.total || 0} <span className="text-lg font-normal opacity-80">次</span></div>
+                                    </div>
+                                    <TrendingUp className="absolute right-[-10px] bottom-[-10px] w-24 h-24 text-white opacity-20" />
+                                </div>
+                            )}
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                                <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                                    <h3 className="font-bold text-gray-700">路線排行榜 ({statsTab === 'monthly' ? '月度' : '年度'})</h3>
+                                    <button onClick={manualClearStats} className="text-red-400 p-1 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
+                                </div>
+                                {((statsTab === 'monthly' ? monthlyKeys : yearlyKeys).length === 0) ? (
+                                    <div className="p-8 text-center text-gray-400 text-sm">暫無統計數據</div>
+                                ) : (
+                                    <ul className="divide-y divide-gray-100">
+                                        {(statsTab === 'monthly' ? monthlyKeys : yearlyKeys).map(key => {
+                                            const t = (statsTab === 'monthly' ? statsData.monthly.trips : statsData.yearly.trips)[key];
+                                            return (
+                                                <li key={key} className="p-4 flex items-center justify-between hover:bg-gray-50">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={`text-xs w-10 h-6 flex items-center justify-center rounded font-bold ${getCompanyColor(t.company).replace('border', '')}`}>{t.company === 'KMB' ? t.route : (t.company === 'CTB' ? 'CTB' : 'NLB')}</span>
+                                                        <div><div className="font-bold text-gray-800 flex items-center gap-2">{t.route} <span className="text-xs font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">{t.desc}</span></div><div className="text-xs text-gray-400 mt-0.5">{t.company === 'NLB' ? '嶼巴' : t.company}</div></div>
+                                                    </div>
+                                                    <div className="font-bold text-xl text-purple-600">{t.count}</div>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (showReport) {
+                const duration = getTripDuration(); const analysisData = getAnalysisData(); const totalPatronage = getTotalPatronage();
+                return (
+                    <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-900 relative">
+                        {editingHistoryIndex !== null && (
+                            <div className="absolute inset-0 z-[70] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+                                <div className="bg-white rounded-xl p-5 w-full max-w-xs shadow-2xl">
+                                    <h3 className="text-lg font-bold mb-2 text-slate-700 flex items-center gap-2"><Pencil className="w-5 h-5"/> 修正記錄</h3>
+                                    <div className="grid grid-cols-2 gap-4 mb-4">
+                                        <div><label className="text-xs font-bold text-green-600 uppercase block mb-1">上車</label><input type="number" value={historyEditValues.on} onChange={(e) => setHistoryEditValues({...historyEditValues, on: e.target.value})} className="w-full border-2 border-green-100 rounded-lg p-2 text-xl font-bold text-center focus:border-green-500 outline-none" /></div>
+                                        <div><label className="text-xs font-bold text-red-500 uppercase block mb-1">落車</label><input type="number" value={historyEditValues.off} onChange={(e) => setHistoryEditValues({...historyEditValues, off: e.target.value})} className="w-full border-2 border-red-100 rounded-lg p-2 text-xl font-bold text-center focus:border-red-500 outline-none" /></div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3"><button onClick={() => setEditingHistoryIndex(null)} className="py-2 bg-gray-100 rounded-lg font-bold text-gray-600">取消</button><button onClick={saveHistoryEdit} className="py-2 bg-blue-600 text-white rounded-lg font-bold shadow-sm">確認修正</button></div>
+                                </div>
+                            </div>
+                        )}
+                        <header className="bg-white border-b p-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+                            <h2 className="text-xl font-bold flex items-center gap-2"><FileText className="w-6 h-6 text-blue-600" /> 統計報告</h2>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setShowTotalPatronage(!showTotalPatronage)} className={`flex items-center gap-1 text-xs font-bold px-2 py-1.5 rounded border transition-colors ${showTotalPatronage ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}><UserPlus className="w-3 h-3"/> {showTotalPatronage ? '總客量' : '隱藏'}</button>
+                                <button onClick={() => setIncludeAnalysis(!includeAnalysis)} className={`flex items-center gap-1 text-xs font-bold px-2 py-1.5 rounded border transition-colors ${includeAnalysis ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-gray-50 text-gray-400 border-gray-200'}`}><Lightbulb className="w-3 h-3"/> {includeAnalysis ? '分析' : '隱藏'}</button>
+                                <button onClick={() => setShowReport(false)} className="text-blue-600 font-medium ml-1">返回</button>
+                            </div>
+                        </header>
+                        <div className="flex-1 overflow-y-auto p-4">
+                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-4">
+                                <div className="p-4 bg-slate-50 border-b grid grid-cols-2 gap-y-3 text-sm">
+                                    <div><span className="text-slate-400 block text-[10px] uppercase font-bold">路線</span><span className="font-bold text-lg">{company} {routeNumber}</span></div>
+                                    <div className="text-right"><span className="text-slate-400 block text-[10px] uppercase font-bold">日期</span><span className="font-bold">{new Date().toLocaleDateString()}</span></div>
+                                </div>
+                                {/* 分析資料 */}
+                                {includeAnalysis && analysisData && (analysisData.maxOnVal > 0 || analysisData.maxOccVal > 0) && (
+                                    <div className="bg-purple-50 border-b border-purple-100 p-3">
+                                        <h3 className="text-purple-800 text-xs font-bold uppercase mb-2 flex items-center gap-1"><TrendingUp className="w-3 h-3"/> 重點客量分析</h3>
+                                        {analysisData.maxOnStops.length > 0 && <div className="flex justify-between items-start text-sm"><span className="text-gray-500 text-xs font-bold">最多人上車</span><div className="text-right font-bold text-purple-700">{analysisData.maxOnStops.map(s => cleanStopName(s.stopName)).join(", ")}</div></div>}
+                                        {analysisData.maxOffStops.length > 0 && <div className="flex justify-between items-start text-sm"><span className="text-gray-500 text-xs font-bold">最多人落車</span><div className="text-right font-bold text-purple-700">{analysisData.maxOffStops.map(s => cleanStopName(s.stopName)).join(", ")}</div></div>}
+                                    </div>
+                                )}
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-white border-b"><tr><th className="p-2 text-left text-blue-600 text-xs w-12 font-bold whitespace-nowrap">時間</th><th className="p-2 text-left text-gray-500 text-xs font-bold whitespace-nowrap">站名</th><th className="p-2 text-center text-green-600 text-xs w-8 font-bold whitespace-nowrap">上</th><th className="p-2 text-center text-red-600 text-xs w-8 font-bold whitespace-nowrap">落</th><th className="p-2 text-right text-gray-800 text-xs w-10 font-bold whitespace-nowrap">車上</th><th className="p-2 w-8"></th></tr></thead>
+                                        <tbody className="divide-y divide-gray-100 bg-white">
+                                            {history.map((record, idx) => {
+                                                if (record.isSeparator) return <tr key={idx} className="bg-gray-100"><td colSpan={6} className="p-2 text-center text-xs font-bold text-slate-500 uppercase">--- 繼續行程 / 轉頁 ---</td></tr>;
+                                                return (
+                                                <tr key={idx} className="hover:bg-gray-50 group">
+                                                    <td className="p-2 text-left font-mono text-blue-600 font-medium text-xs whitespace-nowrap">{record.arrivalTime !== '-' ? record.arrivalTime : '--:--'}</td>
+                                                    <td className="p-2 font-medium text-gray-800 text-xs">{cleanStopName(record.stopName)}</td>
+                                                    <td className="p-2 text-center font-bold text-green-600 text-xs">+{record.on}</td>
+                                                    <td className="p-2 text-center font-bold text-red-500 text-xs">-{record.off}</td>
+                                                    <td className="p-2 text-right font-bold text-gray-900 text-xs">{record.occupancy < 0 ? `(${record.occupancy})` : record.occupancy}</td>
+                                                    <td className="p-2 text-right"><button onClick={() => openHistoryEdit(idx)} className="text-gray-300 hover:text-blue-600 p-1"><Edit3 className="w-4 h-4" /></button></td>
+                                                </tr>
+                                            )})}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                {showTotalPatronage && <div className="p-4 bg-slate-50 border-t flex justify-between items-center"><span className="text-sm font-bold text-slate-500">總客量</span><span className="text-2xl font-bold text-slate-800">{totalPatronage}</span></div>}
+                            </div>
+                        </div>
+                        <div className="p-4 bg-white border-t pb-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                                <button onClick={copyReport} className={`w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 ${copied ? 'bg-green-600 text-white' : 'bg-blue-600 text-white'}`}>{copied ? <><Check className="w-5 h-5"/> 已複製</> : <><Copy className="w-5 h-5"/> 複製報告</>}</button>
+                                <button onClick={exportToExcel} className="w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 bg-emerald-600 text-white hover:bg-emerald-700"><FileSpreadsheet className="w-5 h-5"/> 匯出 Excel</button>
+                            </div>
+                            <button onClick={handleFinishAndReset} className="w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 bg-slate-800 text-white border border-slate-700"><CheckCircle2 className="w-5 h-5 text-green-400" /> 複製並重置</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="flex flex-col h-full bg-slate-100 font-sans text-gray-900 overflow-hidden relative max-w-md mx-auto shadow-xl">
+                    <header className="bg-slate-800 text-white p-3 shadow-md flex-none z-20">
+                        <div className="flex items-center gap-3 mb-3">
+                            <button onClick={onBack} className="p-2 rounded-full hover:bg-slate-700 text-slate-300 transition-colors"><ArrowLeft size={20} /></button>
+                            <h1 className="text-lg font-bold flex items-center gap-2"><BusFront size={20} className="text-blue-400"/> 客量統計</h1>
+                        </div>
+                        <div className="flex justify-between items-start mb-3 gap-2">
+                            <div className="flex-1 flex gap-2">
+                                <button onClick={toggleCompany} className={`px-2 rounded font-bold text-xs flex items-center justify-center min-w-[50px] border shadow-sm active:scale-95 ${getCompanyColor(company)}`}>{company === 'KMB' ? '九巴' : company === 'CTB' ? '城巴' : '嶼巴'}</button>
+                                <input type="text" placeholder="路線 (如 1A)" value={routeNumber} onChange={(e) => setRouteNumber(e.target.value)} className="bg-slate-700 text-white pl-3 pr-2 py-2 rounded w-full text-sm border border-slate-600 focus:outline-none focus:border-blue-400 uppercase font-bold" />
+                                <button onClick={searchRoute} disabled={isLoading || !routeNumber} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 rounded flex items-center justify-center shadow-md"><Search className="w-5 h-5" /></button>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button onClick={openResetConfirm} className="p-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-full"><RotateCcw className="w-5 h-5" /></button>
+                                <button onClick={handleShowReport} className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1 shadow-md active:scale-95"><FileText className="w-5 h-5" /></button>
+                            </div>
+                        </div>
+                        {showVariantSelector && (
+                            <div className="absolute top-28 left-2 right-2 bg-white text-slate-800 rounded-xl shadow-2xl border border-slate-200 p-0 z-50 max-h-[60vh] overflow-y-auto">
+                                <div className="px-4 py-3 bg-slate-50 border-b text-xs font-bold flex justify-between items-center"><span>請選擇路線方向:</span><button onClick={() => setShowVariantSelector(false)} className="text-blue-600">關閉</button></div>
+                                {variants.map((v, idx) => (
+                                    <button key={idx} onClick={() => selectVariant(v)} className="w-full text-left p-4 border-b last:border-0 hover:bg-blue-50">
+                                        <div className="flex items-center gap-3">
+                                            <span className={`text-xs px-2 py-1 rounded font-bold shadow-sm ${getCompanyColor(v.company).replace(/border-\w+/, '').replace(/text-\w+/, '')}`.trim()}>{v.route}</span>
+                                            <div className="flex-1"><div className="text-sm font-bold">{v.description}</div></div>
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        <div className="bg-slate-700 rounded-xl p-3 flex justify-between items-center border border-slate-600 relative overflow-hidden shadow-inner">
+                            <div className="flex-1 min-w-0 pr-2">
+                                <div className="text-slate-400 text-[10px] mb-0.5 uppercase font-bold flex items-center gap-1">當前站點 <List className="w-3 h-3" /></div>
+                                <div className="flex items-center gap-2">
+                                    <div className={`min-w-[1.8rem] h-7 rounded flex items-center justify-center font-bold text-sm shadow-sm px-1 ${getCompanyColor(company).replace(/border-\w+/, '').replace(/text-\w+/, '')}`.trim()}>{currentStopIndex + 1}</div>
+                                    <span className="text-white font-bold text-lg truncate leading-tight">{getCurrentStopDisplay()}</span>
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-end gap-1 uppercase font-bold">車上人數</div>
+                                <div className={`text-3xl font-mono font-bold leading-none ${totalPassengers < 0 ? 'text-red-400' : 'text-white'}`}>{totalPassengers}</div>
+                            </div>
+                        </div>
+                    </header>
+                    <main className="flex-1 flex flex-col p-3 gap-3 overflow-hidden relative bg-slate-100">
+                        <div className="flex-1 grid grid-cols-2 gap-3 min-h-0">
+                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden relative group">
+                                <div className="bg-green-50 py-2 text-center border-b border-green-100 px-2"><span className="text-green-700 text-sm font-extrabold uppercase tracking-wide">上車</span></div>
+                                <div className="flex-1 flex flex-col items-center justify-center relative">
+                                    <button onClick={incrementOn} className="w-full h-full absolute inset-0 active:bg-green-100 transition-colors"></button>
+                                    <span className="relative z-10 mb-2 text-5xl font-bold text-slate-800 font-mono tracking-tighter pointer-events-none">{stopOn}</span>
+                                    <div className="relative z-10 pointer-events-none mb-2"><div className="w-14 h-14 rounded-full bg-green-100 flex items-center justify-center border-2 border-green-200 shadow-sm"><Plus className="w-7 h-7 text-green-600" /></div></div>
+                                </div>
+                                <button onClick={decrementOn} disabled={stopOn === 0} className="absolute bottom-3 left-3 w-10 h-10 rounded-full bg-slate-100 text-slate-400 hover:text-red-500 flex items-center justify-center z-10"><Minus className="w-5 h-5" /></button>
+                            </div>
+                            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden relative group">
+                                <div className="bg-red-50 py-2 text-center border-b border-red-100"><span className="text-red-700 text-sm font-extrabold uppercase tracking-wide">落車</span></div>
+                                <div className="flex-1 flex flex-col items-center justify-center relative">
+                                    <button onClick={incrementOff} className="w-full h-full absolute inset-0 active:bg-red-100 transition-colors"></button>
+                                    <span className="relative z-10 mb-2 text-5xl font-bold text-slate-800 font-mono tracking-tighter pointer-events-none">{stopOff}</span>
+                                    <div className="relative z-10 pointer-events-none mb-2"><div className="w-14 h-14 rounded-full bg-red-100 flex items-center justify-center border-2 border-red-200 shadow-sm"><Minus className="w-7 h-7 text-red-600" /></div></div>
+                                </div>
+                                <button onClick={decrementOff} disabled={stopOff === 0} className="absolute bottom-3 right-3 w-10 h-10 rounded-full bg-slate-100 text-slate-400 hover:text-green-500 flex items-center justify-center z-10"><Minus className="w-5 h-5" /></button>
+                            </div>
+                        </div>
+                        <div className="flex-none pt-1 pb-1">
+                            <div className="flex flex-col gap-2">
+                                <div className="flex gap-2 h-14">
+                                    <button onClick={handlePrevStop} disabled={currentStopIndex === 0} className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl shadow flex flex-col items-center justify-center disabled:opacity-50">
+                                        <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-slate-400">Previous</div>
+                                        <div className="text-base font-bold flex items-center gap-1"><ChevronLeft className="w-4 h-4" /> {getPrevStopDisplay().replace('上一站: ', '')}</div>
+                                    </button>
+                                </div>
+                                <button onClick={isLastStop ? handleCompleteAndShowReport : handleNextStop} className="w-full h-14 bg-slate-800 text-white rounded-xl shadow-lg flex flex-col items-center justify-center px-4">
+                                    <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-slate-400">{isLastStop ? 'End Trip' : 'Next Action'}</div>
+                                    <div className="text-xl font-bold text-yellow-400 flex items-center gap-1">
+                                        {isLastStop ? '完成並結束' : getNextStopDisplay()} <ChevronRight className="w-5 h-5" />
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 主選單介面 (Main Menu)
+        // ==========================================
+        function MainMenu({ onSelect }) {
+            return (
+                <div className="h-full w-full max-w-md mx-auto bg-slate-50 flex flex-col items-center justify-center px-6 font-sans relative overflow-hidden shadow-2xl">
+                    {/* 背景裝飾 */}
+                    <div className="absolute top-[-10%] left-[-10%] w-64 h-64 bg-blue-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
+                    <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-yellow-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
+                    <div className="absolute bottom-[-20%] left-[20%] w-64 h-64 bg-pink-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
+                    
+                    <div className="z-10 w-full mb-10 text-center">
+                        <div className="inline-flex items-center justify-center w-20 h-20 bg-white rounded-2xl shadow-xl mb-6 border border-slate-100">
+                            <BusFront size={40} className="text-blue-600" />
+                        </div>
+                        <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight mb-2">公共交通工具包</h1>
+                        <p className="text-slate-500 font-medium">請選擇你要使用的工具</p>
+                    </div>
+
+                    <div className="z-10 w-full space-y-4">
+                        <button 
+                            onClick={() => onSelect('app1')} 
+                            className="w-full text-left bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-lg transition-all active:scale-[0.98] group flex items-start gap-4"
+                        >
+                            <div className="bg-yellow-100 text-yellow-600 p-3 rounded-xl group-hover:scale-110 transition-transform"><MessageSquare size={28} /></div>
+                            <div className="flex-1">
+                                <h2 className="text-xl font-bold text-slate-800 mb-1">搭車紀錄</h2>
+                                <p className="text-sm text-slate-500 leading-relaxed">記錄個人乘車體驗、車型、車隊編號及冷氣等評語，建立私人搭車資料庫。</p>
+                            </div>
+                        </button>
+
+                        <button 
+                            onClick={() => onSelect('app2')} 
+                            className="w-full text-left bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-lg transition-all active:scale-[0.98] group flex items-start gap-4"
+                        >
+                            <div className="bg-blue-100 text-blue-600 p-3 rounded-xl group-hover:scale-110 transition-transform"><Users size={28} /></div>
+                            <div className="flex-1">
+                                <h2 className="text-xl font-bold text-slate-800 mb-1">客量統計大師</h2>
+                                <p className="text-sm text-slate-500 leading-relaxed">即時統計每站上下車人數，分析高低客量路段並匯出 Excel 詳細報告。</p>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // 總管與路由 (Main App Router)
+        // ==========================================
+        function App() {
+            const [currentApp, setCurrentApp] = useState('menu'); // 'menu', 'app1', 'app2'
+
+            if (currentApp === 'app1') {
+                return <RideRecordApp onBack={() => setCurrentApp('menu')} />;
+            }
+            
+            if (currentApp === 'app2') {
+                return <BusCounterApp onBack={() => setCurrentApp('menu')} />;
+            }
+
+            return <MainMenu onSelect={setCurrentApp} />;
+        }
+
+        // 將組件渲染到根節點
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
