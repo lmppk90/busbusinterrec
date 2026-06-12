@@ -54,9 +54,62 @@
         const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSBgi317ViAQll6wiBhtv_FONfG0A-9nKiNZoaMl70MeOeEvfRoF1TRA1W9ZmiTMuO7kTetDe7uUx2K/pub?output=csv";
 
         // ==========================================
+        // 智能 OCR 處理函數 (Gemini AI)
+        // ==========================================
+        const performOCR = async (file) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    try {
+                        const base64Data = reader.result.split(',')[1];
+                        const apiKey = ""; // Runtime 提供
+                        const payload = {
+                            contents: [{
+                                role: "user",
+                                parts: [
+                                    { text: "Extract ONLY the bus fleet number (e.g. 8123, ATENU1, V6B1) or license plate (e.g. SE6123, UU1234) visible in this image. Return ONLY the alphanumeric text, no spaces, no punctuation, no other words. If you cannot find any, return NONE." },
+                                    { inlineData: { mimeType: file.type, data: base64Data } }
+                                ]
+                            }]
+                        };
+
+                        let response;
+                        let retries = 5;
+                        let delays = [1000, 2000, 4000, 8000, 16000];
+                        for (let i = 0; i < retries; i++) {
+                            try {
+                                response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                });
+                                if (response.ok) break;
+                            } catch (e) {}
+                            if (i < retries - 1) await new Promise(r => setTimeout(r, delays[i]));
+                        }
+
+                        if (!response || !response.ok) throw new Error("API 請求失敗");
+                        const result = await response.json();
+                        let text = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+                        if (text && text !== "NONE") {
+                            // 過濾只剩英文同數字
+                            resolve(text.replace(/[^a-zA-Z0-9]/g, '').toUpperCase());
+                        } else {
+                            resolve(null);
+                        }
+                    } catch (e) {
+                        reject(e);
+                    }
+                };
+                reader.onerror = () => reject(new Error("無法讀取檔案"));
+            });
+        };
+
+        // ==========================================
         // 智能建議輸入框 (Autocomplete Component)
         // ==========================================
-        const AutocompleteInput = ({ value, onChange, options, placeholder, className, icon }) => {
+        const AutocompleteInput = ({ value, onChange, options, placeholder, className, icon, onOcr, isOcrLoading, ocrMessage }) => {
             const [show, setShow] = useState(false);
             const filtered = value ? options.filter(o => o.toUpperCase().includes(value.toUpperCase()) && o !== value) : [];
             
@@ -69,9 +122,28 @@
                         onChange={(e) => { onChange(e.target.value); setShow(true); }}
                         onFocus={() => setShow(true)}
                         onBlur={() => setTimeout(() => setShow(false), 200)} 
-                        className={`${className} ${icon ? 'pl-10' : 'pl-3'}`}
+                        className={`${className} ${icon ? 'pl-10' : 'pl-3'} ${onOcr ? 'pr-28' : 'pr-3'}`}
                         placeholder={placeholder}
                     />
+                    {onOcr && (
+                        <div className="absolute right-2 top-2 flex items-center gap-1.5">
+                            <span className="text-[10px] text-blue-600 font-bold px-1.5 py-0.5 rounded-md bg-blue-100/80 pointer-events-none hidden sm:block whitespace-nowrap shadow-sm">
+                                OCR 測試中
+                            </span>
+                            <button
+                                type="button"
+                                onClick={onOcr}
+                                disabled={isOcrLoading}
+                                className="p-1.5 bg-blue-50 border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-100 disabled:opacity-50 transition-colors shadow-sm flex items-center justify-center relative group"
+                                title="相機 OCR 辨識 (測試中)"
+                            >
+                                {isOcrLoading ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                                <span className="absolute -top-8 right-0 bg-black text-white text-[10px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none transition-opacity sm:hidden">
+                                    OCR (測試中)
+                                </span>
+                            </button>
+                        </div>
+                    )}
                     {show && filtered.length > 0 && (
                         <div className="absolute z-[100] left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-2xl max-h-48 overflow-y-auto">
                             {filtered.map((opt, i) => (
@@ -83,6 +155,11 @@
                                     {opt}
                                 </div>
                             ))}
+                        </div>
+                    )}
+                    {ocrMessage && (
+                        <div className={`text-xs font-bold mt-1.5 ml-1 ${ocrMessage.includes('成功') ? 'text-green-600' : 'text-red-500'}`}>
+                            {ocrMessage}
                         </div>
                     )}
                 </div>
@@ -101,6 +178,10 @@
           const [searchResults, setSearchResults] = useState([]);
           const [clickCount, setClickCount] = useState(0);
           const [lastClickTime, setLastClickTime] = useState(0);
+          
+          const [isOcrLoading, setIsOcrLoading] = useState(false);
+          const [ocrMessage, setOcrMessage] = useState('');
+          const fileInputRef = useRef(null);
 
           const handleSecretClick = () => {
             const now = Date.now();
@@ -140,6 +221,26 @@
             if (window.confirm("確定要刪除這筆紀錄？此動作無法復原。")) {
                 setRecords(records.filter(r => r.id !== id));
             }
+          };
+
+          const handleOcrUpload = async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setIsOcrLoading(true); setOcrMessage('');
+            try {
+                const text = await performOCR(file);
+                if (text) {
+                    setDraftRecord({ ...draftRecord, specificBus: text });
+                    setOcrMessage('✅ OCR 辨識成功！');
+                } else {
+                    setOcrMessage('❌ 未能辨識，請重試或手動輸入');
+                }
+            } catch (err) {
+                setOcrMessage('❌ OCR 系統發生錯誤');
+            }
+            setTimeout(() => setOcrMessage(''), 4000);
+            setIsOcrLoading(false);
+            e.target.value = null; 
           };
 
           const handleSearch = (query) => {
@@ -435,12 +536,16 @@
                   <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1"><Hash size={16} /> 車輛 (編號/車牌)</label>
+                      <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleOcrUpload} />
                       <AutocompleteInput
                           value={draftRecord.specificBus || ''}
                           onChange={(val) => setDraftRecord({ ...draftRecord, specificBus: val })}
                           options={fleetOptions}
                           placeholder="例如: 8123 或者 SE6"
                           className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-lg font-bold text-center bg-gray-50"
+                          onOcr={() => fileInputRef.current?.click()}
+                          isOcrLoading={isOcrLoading}
+                          ocrMessage={ocrMessage}
                       />
                     </div>
                     <div>
@@ -518,7 +623,6 @@
                     <div key={record.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-2 relative overflow-hidden group">
                       <div className={`absolute top-0 left-0 w-1.5 h-full ${companyStyle.bg}`}></div>
                       
-                      {/* 手動刪除按鈕 */}
                       <button onClick={() => handleDeleteRecord(record.id)} className="absolute top-3 right-3 text-gray-300 hover:text-red-500 active:text-red-600 transition-colors bg-white/80 rounded-full p-1 z-10">
                           <Trash2 size={18} />
                       </button>
@@ -748,7 +852,6 @@
             const [company, setCompany] = useState('KMB');
             const [routeNumber, setRouteNumber] = useState('');
             const [currentStopIndex, setCurrentStopIndex] = useState(0); 
-            // 新增 comment 屬性去記錄評語
             const [tripInfo, setTripInfo] = useState({ plate: '', captainId: '', captainName: '', comment: '' });
             const [activeVariant, setActiveVariant] = useState(null);
             const [tripRecorded, setTripRecorded] = useState(false);
@@ -758,7 +861,6 @@
             const [stopOff, setStopOff] = useState(0);
             const [arrivalTime, setArrivalTime] = useState('');
             const [currentNote, setCurrentNote] = useState('');
-            const [showNoteInput, setShowNoteInput] = useState(false);
             const [includeNotesInReport, setIncludeNotesInReport] = useState(true);
             const [includeAnalysis, setIncludeAnalysis] = useState(true);
             const [showTotalPatronage, setShowTotalPatronage] = useState(true); 
@@ -767,13 +869,8 @@
             const [showTripSettings, setShowTripSettings] = useState(false);
             const [showStopSelector, setShowStopSelector] = useState(false);
             const [showResetConfirm, setShowResetConfirm] = useState(false);
-            const [showNegativeCorrection, setShowNegativeCorrection] = useState(false); 
-            const [negativeDeficit, setNegativeDeficit] = useState(0); 
             const [copied, setCopied] = useState(false);
             const [durationFormat, setDurationFormat] = useState('min'); 
-            const [editingValue, setEditingValue] = useState(null); 
-            const [manualInputMode, setManualInputMode] = useState('direct_base'); 
-            const [manualInputValue, setManualInputValue] = useState('');
             const [editingHistoryIndex, setEditingHistoryIndex] = useState(null);
             const [historyEditValues, setHistoryEditValues] = useState({ on: 0, off: 0, note: '', time: '' });
             const [isLoading, setIsLoading] = useState(false);
@@ -783,6 +880,10 @@
             const [apiError, setApiError] = useState(null);
             const [autoSyncRecord, setAutoSyncRecord] = useState(true); 
             const isLoaded = useRef(false);
+            
+            const [isOcrLoading, setIsOcrLoading] = useState(false);
+            const [ocrMessage, setOcrMessage] = useState('');
+            const fileInputRef = useRef(null);
 
             const formatTime24 = (date = new Date()) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
             const cleanStopName = (name) => {
@@ -979,6 +1080,26 @@
                 } catch (err) { setApiError(err.message || "加載站點失敗"); } finally { setIsLoading(false); }
             };
 
+            const handleOcrUpload = async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setIsOcrLoading(true); setOcrMessage('');
+                try {
+                    const text = await performOCR(file);
+                    if (text) {
+                        setTripInfo({ ...tripInfo, plate: text });
+                        setOcrMessage('✅ OCR 辨識成功！');
+                    } else {
+                        setOcrMessage('❌ 未能辨識，請手動輸入');
+                    }
+                } catch (err) {
+                    setOcrMessage('❌ OCR 系統發生錯誤');
+                }
+                setTimeout(() => setOcrMessage(''), 4000);
+                setIsOcrLoading(false);
+                e.target.value = null;
+            };
+
             const resetCounter = () => {
                 setCurrentStopIndex(0); setInitialPassengers(0); setTotalPassengers(0); setStopOn(0); setStopOff(0); setArrivalTime('');
                 setHistory([]); setNegativeDeficit(0); setShowNegativeCorrection(false); setTripRecorded(false); setCurrentNote(''); 
@@ -1031,7 +1152,6 @@
                 setCurrentStopIndex(prev => prev + 1); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); 
             };
             
-            // 提早結束行程功能
             const handleCompleteAndShowReport = () => {
                 saveTripToStats();
                 const currentStopName = routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`;
@@ -1212,12 +1332,16 @@
                             <div className="space-y-4 mb-6">
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">車隊編號/車牌</label>
+                                    <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleOcrUpload} />
                                     <AutocompleteInput
                                         value={tripInfo.plate || ''}
                                         onChange={(val) => setTripInfo({...tripInfo, plate: val.toUpperCase()})}
                                         options={companyFleets}
                                         placeholder="例如: 8123 或者 SE6"
                                         className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2"
+                                        onOcr={() => fileInputRef.current?.click()}
+                                        isOcrLoading={isOcrLoading}
+                                        ocrMessage={ocrMessage}
                                     />
                                 </div>
                                 <div className="grid grid-cols-2 gap-3 mt-4">
@@ -1253,6 +1377,11 @@
                                         {currentStopIndex === idx && <Check size={18} className="text-blue-600"/>}
                                     </button>
                                 ))}
+                            </div>
+                            <div className="p-4 border-t bg-white pb-8 shadow-[0_-4px_15px_-3px_rgba(0,0,0,0.1)]">
+                                <button onClick={handleCompleteAndShowReport} className="w-full bg-red-500 hover:bg-red-600 active:bg-red-700 text-white font-bold py-4 rounded-xl shadow-md flex justify-center items-center gap-2 transition-colors">
+                                    <StopCircle size={20}/> 跳至終點並生成報告
+                                </button>
                             </div>
                         </div>
                     </div>
