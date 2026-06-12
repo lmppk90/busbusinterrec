@@ -3,21 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>二合一</title>
+    <title>客量統計</title>
     
-    <!-- iOS 專屬設定 (PWA) -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="二合一">
     <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3201/3201884.png">
     
-    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- SheetJS (XLSX) for Excel Export -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
     
-    <!-- React, ReactDOM, Lucide-React 模組映射 -->
     <script type="importmap">
     {
       "imports": {
@@ -27,42 +21,28 @@
       }
     }
     </script>
-    
-    <!-- Babel 編譯器 -->
     <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
     
     <style>
-        body {
-            overscroll-behavior-y: none;
-            -webkit-tap-highlight-color: transparent;
-        }
-        #root {
-            padding-top: env(safe-area-inset-top);
-            padding-bottom: env(safe-area-inset-bottom);
-            padding-left: env(safe-area-inset-left);
-            padding-right: env(safe-area-inset-right);
-        }
+        body { overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; }
+        #root { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
     </style>
 </head>
 <body class="bg-slate-100 h-screen w-screen overflow-hidden">
     <div id="root" class="h-full w-full"></div>
 
     <script type="text/babel" data-type="module" data-presets="react">
-        import React, { useState, useEffect, useRef } from 'react';
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
         import ReactDOM from 'react-dom/client';
-        
-        // 統一引入所有需要用到的圖標 (包含 App 1 及 App 2)
         import { 
             Plus, Minus, RotateCcw, FileText, ChevronRight, ChevronLeft, Search, 
             Loader2, AlertCircle, Clock, Edit3, List, Users, Settings, 
             Copy, Check, BusFront, User, Hash, Info, MapPin, AlertTriangle, X, Pencil, Calculator, Timer,
             BarChart3, Trash2, TrendingUp, Calendar, CheckCircle2, StickyNote, Eye, EyeOff, GitMerge, FileSpreadsheet, Lightbulb, UserPlus, ArrowDownToLine, StopCircle,
-            Bus, ArrowLeft, Save, MessageSquare, CheckCircle, XCircle, RefreshCw, List as ListIcon, History, Camera, Home
+            Bus, ArrowLeft, Save, MessageSquare, CheckCircle, XCircle, RefreshCw, List as ListIcon, History, Camera, Home, ClipboardList, ChevronDown
         } from 'lucide-react';
 
-        // ==========================================
-        // App 1: 搭車紀錄 (Ride Record App)
-        // ==========================================
+        // 共享常數
         const COMPANY_STYLES = {
           "城巴": { bg: "bg-yellow-400", text: "text-blue-900", border: "border-yellow-500", lightBg: "bg-yellow-50", badge: "bg-yellow-400 text-blue-900", headerBg: "bg-yellow-400", headerText: "text-blue-900" },
           "九巴": { bg: "bg-red-600", text: "text-white", border: "border-red-700", lightBg: "bg-red-50", badge: "bg-red-600 text-white", headerBg: "bg-red-600", headerText: "text-white" },
@@ -73,25 +53,54 @@
         const COMPANY_MAPPING = { "CTB": "城巴", "KMB": "九巴", "LWB": "龍運", "NLB": "新大嶼山巴士" };
         const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSBgi317ViAQll6wiBhtv_FONfG0A-9nKiNZoaMl70MeOeEvfRoF1TRA1W9ZmiTMuO7kTetDe7uUx2K/pub?output=csv";
 
-        function RideRecordApp({ onBack }) {
-          const [records, setRecords] = useState(() => JSON.parse(localStorage.getItem('bus_records') || '[]'));
-          const [busDatabase, setBusDatabase] = useState({}); 
-          const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('google_sheet_url') || DEFAULT_SHEET_URL);
-          const [isLoadingDB, setIsLoadingDB] = useState(false);
-          const [dbError, setDbError] = useState('');
+        // ==========================================
+        // 智能建議輸入框 (Autocomplete Component)
+        // ==========================================
+        const AutocompleteInput = ({ value, onChange, options, placeholder, className, icon }) => {
+            const [show, setShow] = useState(false);
+            const filtered = value ? options.filter(o => o.toUpperCase().includes(value.toUpperCase()) && o !== value) : [];
+            
+            return (
+                <div className="relative w-full">
+                    {icon && <div className="absolute left-3 top-3.5 text-gray-400">{icon}</div>}
+                    <input 
+                        type="text" 
+                        value={value} 
+                        onChange={(e) => { onChange(e.target.value); setShow(true); }}
+                        onFocus={() => setShow(true)}
+                        onBlur={() => setTimeout(() => setShow(false), 200)} 
+                        className={`${className} ${icon ? 'pl-10' : 'pl-3'}`}
+                        placeholder={placeholder}
+                    />
+                    {show && filtered.length > 0 && (
+                        <div className="absolute z-[100] left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-2xl max-h-48 overflow-y-auto">
+                            {filtered.map((opt, i) => (
+                                <div 
+                                    key={i} 
+                                    onMouseDown={(e) => { e.preventDefault(); onChange(opt); setShow(false); }}
+                                    className="px-4 py-3 hover:bg-blue-50 border-b border-gray-50 last:border-0 cursor-pointer font-bold text-gray-800 text-sm active:bg-blue-100"
+                                >
+                                    {opt}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // ==========================================
+        // App 1: 搭車紀錄 (輸入與列表)
+        // ==========================================
+        function RideRecordApp({ onBack, records, setRecords, busDatabase, sheetUrl, setSheetUrl, fetchDatabase, isLoadingDB, dbError }) {
           const [currentView, setCurrentView] = useState('home'); 
           const [viewMode, setViewMode] = useState('company'); 
-          const [draftRecord, setDraftRecord] = useState({ date: new Date().toISOString().split('T')[0] });
+          const [draftRecord, setDraftRecord] = useState({ date: new Date().toISOString().split('T')[0], specificBus: '' });
           const [fleetFilter, setFleetFilter] = useState('all');
           const [searchQuery, setSearchQuery] = useState('');
           const [searchResults, setSearchResults] = useState([]);
           const [clickCount, setClickCount] = useState(0);
           const [lastClickTime, setLastClickTime] = useState(0);
-          const [isOcrLoading, setIsOcrLoading] = useState(false);
-          const fileInputRef = useRef(null);
-
-          useEffect(() => { localStorage.setItem('bus_records', JSON.stringify(records)); }, [records]);
-          useEffect(() => { fetchDatabase(sheetUrl); }, [sheetUrl]);
 
           const handleSecretClick = () => {
             const now = Date.now();
@@ -102,81 +111,6 @@
               if (newCount >= 10) { setCurrentView('settings'); setClickCount(0); }
             }
             setLastClickTime(now);
-          };
-
-          const fetchDatabase = async (url) => {
-            if (!url) return;
-            setIsLoadingDB(true); setDbError('');
-            try {
-              const res = await fetch(url);
-              if (!res.ok) throw new Error(`連線失敗 (HTTP ${res.status})`);
-              const text = await res.text();
-              const lines = text.split(/\r?\n/).slice(1);
-              const newDb = {};
-              let hasData = false;
-              lines.forEach(line => {
-                if (!line.trim()) return;
-                const parts = [];
-                let cur = ''; let inQuote = false;
-                for (let j = 0; j < line.length; j++) {
-                  if (line[j] === '"') inQuote = !inQuote;
-                  else if (line[j] === ',' && !inQuote) { parts.push(cur); cur = ''; }
-                  else cur += line[j];
-                }
-                parts.push(cur);
-                if (parts.length < 5) return; 
-                const rawCompany = parts[0]?.replace(/^"|"$/g, '').trim();
-                const maker = parts[1]?.replace(/^"|"$/g, '').trim();
-                const majorModel = parts[2]?.replace(/^"|"$/g, '').trim(); 
-                const minorModel = parts[3]?.replace(/^"|"$/g, '').trim(); 
-                const fleetNum = parts[4]?.replace(/^"|"$/g, '').trim(); 
-                const plateNum = parts[5]?.replace(/^"|"$/g, '').trim(); 
-                if (!rawCompany || !maker || !minorModel || !fleetNum) return;
-                const finalMajorModel = majorModel || minorModel;
-                const company = COMPANY_MAPPING[rawCompany.toUpperCase()] || rawCompany;
-                hasData = true;
-                let displayBusId = fleetNum;
-                if (plateNum) displayBusId = `${fleetNum} (${plateNum})`;
-                if (!newDb[company]) newDb[company] = {};
-                if (!newDb[company][maker]) newDb[company][maker] = {};
-                if (!newDb[company][maker][finalMajorModel]) newDb[company][maker][finalMajorModel] = {};
-                if (!newDb[company][maker][finalMajorModel][minorModel]) newDb[company][maker][finalMajorModel][minorModel] = [];
-                if (!newDb[company][maker][finalMajorModel][minorModel].includes(displayBusId)) {
-                  newDb[company][maker][finalMajorModel][minorModel].push(displayBusId);
-                }
-              });
-              if (hasData) setBusDatabase(newDb);
-              else throw new Error("未搵到有效資料");
-            } catch (e) { setDbError(e.message); } finally { setIsLoadingDB(false); }
-          };
-
-          const loadTesseractScript = () => new Promise((resolve, reject) => {
-            if (window.Tesseract) { resolve(); return; }
-            const script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-            script.onload = resolve;
-            script.onerror = reject;
-            document.body.appendChild(script);
-          });
-
-          const handleImageCapture = async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            setIsOcrLoading(true);
-            try {
-              await loadTesseractScript();
-              const result = await window.Tesseract.recognize(file, 'eng');
-              const text = result.data.text;
-              const match = text.match(/[A-Z]{2}\s?\d{1,4}/i);
-              if (match) {
-                const plate = match[0].replace(/\s/g, '').toUpperCase();
-                handleSearch(plate);
-              } else {
-                alert("搵唔到明顯嘅車牌號碼，請對準再試！\n讀取到嘅字：" + text.substring(0, 30));
-              }
-            } catch (err) { alert("相片識別失敗，請重新嘗試。"); } finally {
-              setIsOcrLoading(false); e.target.value = null;
-            }
           };
 
           const goBack = () => {
@@ -198,8 +132,14 @@
             const newRecord = { ...draftRecord, id: Date.now().toString() };
             setRecords([newRecord, ...records]);
             setCurrentView('home');
-            setDraftRecord({ date: new Date().toISOString().split('T')[0] });
+            setDraftRecord({ date: new Date().toISOString().split('T')[0], specificBus: '' });
             setSearchQuery('');
+          };
+
+          const handleDeleteRecord = (id) => {
+            if (window.confirm("確定要刪除這筆紀錄？此動作無法復原。")) {
+                setRecords(records.filter(r => r.id !== id));
+            }
           };
 
           const handleSearch = (query) => {
@@ -298,25 +238,20 @@
 
             return (
             <div className="flex flex-col h-full bg-gray-50">
-              <input type="file" accept="image/*" capture="environment" ref={fileInputRef} onChange={handleImageCapture} className="hidden" />
-              {isOcrLoading && (
-                <div className="absolute inset-0 z-50 bg-black/60 flex flex-col items-center justify-center text-white">
-                    <RefreshCw size={48} className="animate-spin mb-4" />
-                    <p className="text-xl font-bold">AI 正在識別車牌...</p>
-                </div>
-              )}
               <div className="bg-white text-gray-800 p-4 flex justify-between items-center sticky top-0 z-20 shadow-sm border-b border-gray-100">
                 <div className="flex items-center gap-3">
-                  <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-gray-100 text-gray-600"><Home size={24} /></button>
+                  <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-gray-100 text-gray-600 transition-colors"><ArrowLeft size={24} /></button>
                   <h1 onClick={handleSecretClick} className="text-xl font-bold flex items-center gap-2 cursor-pointer select-none">
-                    <Bus size={24} className="text-blue-600" /> 搭車紀錄
+                    <ClipboardList size={24} className="text-blue-600" /> 搭車紀錄
                     {isLoadingDB && <RefreshCw size={16} className="animate-spin text-gray-400" />}
                   </h1>
                 </div>
-                <button onClick={() => setCurrentView('list')} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors relative">
-                  <ListIcon size={22} />
-                  {records.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
-                </button>
+                <div className="flex gap-1">
+                  <button onClick={() => setCurrentView('list')} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors relative">
+                    <ListIcon size={22} />
+                    {records.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>}
+                  </button>
+                </div>
               </div>
 
               <div className="bg-white p-4 sticky top-[68px] z-10 shadow-sm border-b border-gray-100">
@@ -326,15 +261,12 @@
                     <input type="text" placeholder="搜尋車隊編號或車牌..." value={searchQuery} onChange={(e) => handleSearch(e.target.value)} className="w-full bg-gray-100 pl-10 pr-10 py-3 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-lg transition-shadow" />
                     {searchQuery && <button onClick={() => handleSearch('')} className="absolute right-3 top-3.5 text-gray-400 hover:text-gray-600"><XCircle size={20} /></button>}
                   </div>
-                  <button onClick={() => fileInputRef.current.click()} className="bg-blue-600 text-white p-3 rounded-xl shadow-md active:bg-blue-700 transition-colors flex items-center justify-center">
-                     <Camera size={24} />
-                  </button>
                 </div>
                 {!searchQuery && (
                   <div className="flex bg-gray-200/60 p-1 rounded-xl gap-1">
                     <button onClick={() => { setViewMode('company'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'company' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>公司</button>
                     <button onClick={() => { setViewMode('maker'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'maker' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>車廠</button>
-                    <button onClick={() => { setViewMode('model_view'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'model_view' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>大車種</button>
+                    <button onClick={() => { setViewMode('model_view'); setDraftRecord({ date: draftRecord.date }); }} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-all ${viewMode === 'model_view' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}>車型</button>
                   </div>
                 )}
               </div>
@@ -435,11 +367,11 @@
               setDraftRecord({ ...draftRecord, maker: item }); setCurrentView('select_minor');
           }, (item) => ({ company: draftRecord.company, maker: item }));
 
-          const renderSelectMajor = () => renderGenericMenu('揀大車種', Object.keys(busDatabase[draftRecord.company]?.[draftRecord.maker] || {}), (item) => {
+          const renderSelectMajor = () => renderGenericMenu('揀車型', Object.keys(busDatabase[draftRecord.company]?.[draftRecord.maker] || {}), (item) => {
               setDraftRecord({ ...draftRecord, majorModel: item }); setCurrentView('select_minor');
           }, (item) => ({ company: draftRecord.company, maker: draftRecord.maker, majorModel: item }));
 
-          const renderSelectMinor = () => renderGenericMenu('揀細車種', getMinorsList(), (item) => {
+          const renderSelectMinor = () => renderGenericMenu('揀車隊', getMinorsList(), (item) => {
               const newRecord = { ...draftRecord, minorModel: item, model: item };
               if (viewMode === 'company') newRecord.majorModel = deduceMajorFromMinor(draftRecord.company, draftRecord.maker, item);
               setDraftRecord(newRecord); setFleetFilter('all'); setCurrentView('fleetNumber');
@@ -469,7 +401,7 @@
                     <div className="flex-1 overflow-y-auto p-4 pt-2">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
                         {displayFleets.map(item => (
-                          <button key={item} onClick={() => { setDraftRecord({ ...draftRecord, specificBus: item }); setCurrentView('details'); }} className={`py-4 px-3 rounded-xl border-2 text-center font-bold text-lg active:scale-95 break-all ${checkRidden(item) ? 'bg-green-50 border-green-400 text-green-700' : 'bg-white border-red-300 text-red-700'}`}>{item}</button>
+                          <button key={item} onClick={() => { setDraftRecord({ ...draftRecord, specificBus: item }); setCurrentView('details'); }} className={`py-4 px-3 rounded-xl border-2 text-center font-bold text-lg active:scale-95 break-all transition-colors shadow-sm ${checkRidden(item) ? 'bg-green-100 border-green-500 text-green-800' : 'bg-white border-red-300 text-red-700 hover:border-red-500'}`}>{item}</button>
                         ))}
                       </div>
                       <button onClick={() => { setDraftRecord({ ...draftRecord, specificBus: '' }); setCurrentView('details'); }} className="w-full bg-white border border-gray-300 p-4 rounded-xl shadow-sm flex justify-center items-center gap-2"><span className="text-lg font-medium text-gray-700">其他 (手動輸入)</span></button>
@@ -482,6 +414,8 @@
 
           const renderDetails = () => {
             const pastReviews = records.filter(r => r.company === draftRecord.company && (r.minorModel || r.model) === draftRecord.minorModel && r.specificBus && r.specificBus === draftRecord.specificBus).sort((a, b) => new Date(b.date) - new Date(a.date));
+            const fleetOptions = getFleetOptions();
+
             return (
               <div className="flex flex-col h-full bg-gray-50">
                 <div className={`p-4 shadow-md flex items-center gap-3 sticky top-0 z-10 ${theme.headerBg} ${theme.headerText}`}>
@@ -501,7 +435,13 @@
                   <div className="space-y-4 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1"><Hash size={16} /> 車輛 (編號/車牌)</label>
-                      <input type="text" value={draftRecord.specificBus || ''} onChange={(e) => setDraftRecord({ ...draftRecord, specificBus: e.target.value })} className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-gray-400 outline-none text-xl font-bold text-center bg-gray-50" />
+                      <AutocompleteInput
+                          value={draftRecord.specificBus || ''}
+                          onChange={(val) => setDraftRecord({ ...draftRecord, specificBus: val })}
+                          options={fleetOptions}
+                          placeholder="例如: 8123 或者 SE6"
+                          className="w-full border border-gray-300 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-lg font-bold text-center bg-gray-50"
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1"><Calendar size={16} /> 乘搭日期</label>
@@ -543,7 +483,7 @@
                 <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl text-blue-900 text-sm space-y-2">
                   <h3 className="font-bold text-base flex items-center gap-1"><AlertTriangle size={18} /> Excel 格式要求</h3>
                   <ol className="list-decimal pl-4 space-y-1">
-                    <li>A至F欄為：<strong>公司、車廠、大車種、細車種、編號、車牌(選填)</strong>。</li>
+                    <li>A至F欄為：<strong>公司、車廠、車型、車隊、編號、車牌(選填)</strong>。</li>
                     <li>CTB、KMB等縮寫會自動被翻譯為中文。</li>
                   </ol>
                 </div>
@@ -575,25 +515,33 @@
                   records.map(record => {
                     const companyStyle = COMPANY_STYLES[record.company] || COMPANY_STYLES["預設"];
                     return (
-                    <div key={record.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-2 relative overflow-hidden">
+                    <div key={record.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-2 relative overflow-hidden group">
                       <div className={`absolute top-0 left-0 w-1.5 h-full ${companyStyle.bg}`}></div>
-                      <div className="flex justify-between items-start">
+                      
+                      {/* 手動刪除按鈕 */}
+                      <button onClick={() => handleDeleteRecord(record.id)} className="absolute top-3 right-3 text-gray-300 hover:text-red-500 active:text-red-600 transition-colors bg-white/80 rounded-full p-1 z-10">
+                          <Trash2 size={18} />
+                      </button>
+
+                      <div className="flex justify-between items-start pr-8">
                         <div>
                           <div className="flex items-center gap-2 mb-1">
                             <span className={`font-bold text-xs px-2 py-0.5 rounded shadow-sm ${companyStyle.badge}`}>{record.company}</span>
                             <span className="text-gray-900 font-bold text-lg">{record.specificBus}</span>
                           </div>
                           <div className="text-sm text-gray-500 flex items-center gap-1 mb-1 flex-wrap">
-                            <span className="bg-gray-100 px-2 py-0.5 rounded">{record.maker}</span>
+                            <span className="bg-gray-100 px-2 py-0.5 rounded">{record.maker || '?'}</span>
                             {record.majorModel && <><ChevronRight size={14} className="text-gray-400" /><span className="bg-gray-100 px-2 py-0.5 rounded">{record.majorModel}</span></>}
                             <ChevronRight size={14} className="text-gray-400" />
-                            <span className="bg-gray-100 px-2 py-0.5 rounded font-medium">{record.minorModel || record.model}</span>
+                            <span className="bg-gray-100 px-2 py-0.5 rounded font-medium">{record.minorModel || record.model || '?'}</span>
                           </div>
                         </div>
-                        <div className="text-xs text-gray-500 flex items-center gap-1 bg-gray-50 border border-gray-200 px-2 py-1 rounded-lg"><Calendar size={12} />{record.date}</div>
                       </div>
+                      
+                      <div className="text-xs text-gray-500 flex items-center gap-1 bg-gray-50 border border-gray-200 px-2 py-1.5 rounded-lg w-max mt-1"><Calendar size={12} />{record.date}</div>
+
                       {record.comment && (
-                        <div className="mt-2 text-sm text-gray-700 bg-gray-50 p-3 rounded-lg border border-gray-100 flex gap-2 items-start">
+                        <div className="mt-1 text-sm text-gray-700 bg-gray-50 p-3 rounded-lg border border-gray-100 flex gap-2 items-start">
                           <MessageSquare size={16} className="text-gray-400 shrink-0 mt-0.5" />
                           <p className="leading-relaxed whitespace-pre-wrap">{record.comment}</p>
                         </div>
@@ -606,7 +554,7 @@
           );
 
           return (
-            <div className="h-full w-full max-w-md mx-auto bg-gray-50 overflow-hidden shadow-2xl relative font-sans">
+            <div className="h-full w-full bg-gray-50 overflow-hidden shadow-2xl relative font-sans">
               {currentView === 'home' && renderHome()}
               {currentView === 'select_company' && renderSelectCompany()}
               {currentView === 'select_maker' && renderSelectMaker()}
@@ -620,15 +568,188 @@
           );
         }
 
+        // ==========================================
+        // App 1 統計 (RideRecord Stats) 獨立組件
+        // ==========================================
+        function RideRecordStats({ onBack, records, busDatabase }) {
+            const [statTab, setStatTab] = useState('thisMonth');
+            const [plateSearch, setPlateSearch] = useState('');
+
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            const l_yyyy = lastMonthDate.getFullYear();
+            const l_mm = String(lastMonthDate.getMonth() + 1).padStart(2, '0');
+
+            let title = '';
+            let filterPrefix = '';
+            if (statTab === 'thisMonth') { title = '本月統計'; filterPrefix = `${yyyy}-${mm}`; }
+            else if (statTab === 'lastMonth') { title = '上月回顧'; filterPrefix = `${l_yyyy}-${l_mm}`; }
+            else if (statTab === 'thisYear') { title = `${yyyy}年統計`; filterPrefix = `${yyyy}`; }
+            else if (statTab === 'lastYear') { title = `${yyyy-1}年統計`; filterPrefix = `${yyyy-1}`; }
+
+            let filtered = records;
+            if (plateSearch) {
+                title = `搜尋: ${plateSearch}`;
+                filtered = records.filter(r => r.specificBus && r.specificBus.toLowerCase().includes(plateSearch.toLowerCase()));
+            } else {
+                filtered = records.filter(r => r.date && r.date.startsWith(filterPrefix));
+            }
+
+            const compData = {};
+            const modelData = {};
+            filtered.forEach(r => {
+                compData[r.company] = (compData[r.company] || 0) + 1;
+                const m = r.majorModel || r.model || '未知車型';
+                modelData[m] = (modelData[m] || 0) + 1;
+            });
+
+            const sortedComp = Object.entries(compData).sort((a,b)=>b[1]-a[1]);
+            const sortedModel = Object.entries(modelData).sort((a,b)=>b[1]-a[1]);
+
+            const suggestedPlates = useMemo(() => {
+                const plates = new Set();
+                records.forEach(r => {
+                    if (r.specificBus && r.specificBus.trim() !== '') plates.add(r.specificBus.toUpperCase());
+                });
+                return Array.from(plates).sort();
+            }, [records]);
+
+            return (
+                <div className="flex flex-col h-full bg-gray-50 pb-6 w-full max-w-md mx-auto shadow-2xl relative font-sans">
+                    <div className="bg-blue-600 text-white p-4 shadow-md flex items-center gap-3 sticky top-0 z-10">
+                        <button onClick={onBack} className="p-1.5 -ml-1.5 rounded-full hover:bg-blue-700 active:bg-blue-800"><ArrowLeft size={24} /></button>
+                        <h1 className="text-xl font-bold">搭車紀錄統計</h1>
+                    </div>
+                    <div className="p-3 bg-white shadow-sm border-b border-gray-100 flex flex-col gap-3">
+                        <div className="flex gap-1 text-sm font-bold">
+                            <button onClick={()=>{setStatTab('thisMonth'); setPlateSearch('');}} className={`flex-1 py-2 rounded-lg transition-colors ${statTab==='thisMonth'&&!plateSearch?'bg-blue-100 text-blue-700':'text-gray-500 hover:bg-gray-100'}`}>本月</button>
+                            <button onClick={()=>{setStatTab('lastMonth'); setPlateSearch('');}} className={`flex-1 py-2 rounded-lg transition-colors ${statTab==='lastMonth'&&!plateSearch?'bg-blue-100 text-blue-700':'text-gray-500 hover:bg-gray-100'}`}>上月</button>
+                            <button onClick={()=>{setStatTab('thisYear'); setPlateSearch('');}} className={`flex-1 py-2 rounded-lg transition-colors ${statTab==='thisYear'&&!plateSearch?'bg-blue-100 text-blue-700':'text-gray-500 hover:bg-gray-100'}`}>本年</button>
+                            <button onClick={()=>{setStatTab('lastYear'); setPlateSearch('');}} className={`flex-1 py-2 rounded-lg transition-colors ${statTab==='lastYear'&&!plateSearch?'bg-blue-100 text-blue-700':'text-gray-500 hover:bg-gray-100'}`}>上年</button>
+                        </div>
+                        <div className="relative z-50">
+                            <AutocompleteInput
+                                value={plateSearch}
+                                onChange={setPlateSearch}
+                                options={suggestedPlates}
+                                placeholder="輸入車牌搜尋統計..."
+                                className="w-full bg-gray-100 py-2.5 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner border border-gray-200"
+                                icon={<Search size={18} />}
+                            />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-gray-600 font-bold"><TrendingUp size={20} className="text-blue-500"/> {title}搭車</div>
+                            <span className="text-4xl font-extrabold text-blue-600">{filtered.length} <span className="text-sm font-normal text-gray-400">次</span></span>
+                        </div>
+
+                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2 border-b border-gray-50 pb-2"><Bus size={18} className="text-indigo-500"/> 乘搭公司</h3>
+                            {sortedComp.length > 0 ? sortedComp.map(([c, count]) => (
+                                <div key={c} className="flex items-center justify-between mb-3 last:mb-0">
+                                    <span className={`text-xs px-2 py-1 rounded font-bold shadow-sm ${COMPANY_STYLES[c]?.badge || COMPANY_STYLES["預設"].badge}`}>{c}</span>
+                                    <span className="font-bold text-gray-700">{count} 次</span>
+                                </div>
+                            )) : <div className="text-sm text-gray-400 text-center py-4">未有乘搭紀錄</div>}
+                        </div>
+
+                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2 border-b border-gray-50 pb-2"><ListIcon size={18} className="text-emerald-500"/> 乘搭車型</h3>
+                            {sortedModel.length > 0 ? sortedModel.map(([m, count]) => (
+                                <div key={m} className="flex items-center justify-between mb-3 border-b border-gray-50 pb-3 last:border-0 last:pb-0">
+                                    <span className="font-medium text-gray-800 text-sm">{m}</span>
+                                    <span className="font-bold text-emerald-600 text-sm bg-emerald-50 px-2 py-1 rounded">{count} 次</span>
+                                </div>
+                            )) : <div className="text-sm text-gray-400 text-center py-4">未有乘搭紀錄</div>}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
 
         // ==========================================
-        // App 2: 巴士客量統計 (Bus Counter App)
+        // App 2 統計 (BusCounter Stats) 獨立組件
         // ==========================================
-        function BusCounterApp({ onBack }) {
+        function BusCounterStats({ onBack, statsData, manualClearStats, getCompanyColor }) {
+            const [statsTab, setStatsTab] = useState('monthly');
+            const safeStatsData = statsData || { yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 } };
+            
+            const yearlyKeys = Object.keys(safeStatsData.yearly?.trips || {}).sort((a, b) => safeStatsData.yearly.trips[b].count - safeStatsData.yearly.trips[a].count);
+            const monthlyKeys = Object.keys(safeStatsData.monthly?.trips || {}).sort((a, b) => safeStatsData.monthly.trips[b].count - safeStatsData.monthly.trips[a].count);
+
+            return (
+                <div className="flex flex-col h-full bg-gray-50 font-sans text-gray-900 relative w-full max-w-md mx-auto shadow-2xl">
+                    <header className="bg-white border-b p-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <button onClick={onBack} className="p-1.5 -ml-1.5 rounded-full hover:bg-gray-100 text-gray-600"><ArrowLeft size={24} /></button>
+                            <h2 className="text-xl font-bold flex items-center gap-2"><BarChart3 className="w-6 h-6 text-purple-600" /> 客量統計回顧</h2>
+                        </div>
+                    </header>
+                    <div className="px-4 pt-4">
+                        <div className="flex bg-gray-200 rounded-lg p-1">
+                            <button onClick={() => setStatsTab('monthly')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-all ${statsTab === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>月度統計</button>
+                            <button onClick={() => setStatsTab('yearly')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-all ${statsTab === 'yearly' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>年度統計</button>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                        {statsTab === 'monthly' ? (
+                            <div className="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-6 text-white shadow-md relative overflow-hidden transition-all">
+                                <div className="relative z-10">
+                                    <div className="text-sm font-medium opacity-80 mb-1 flex items-center gap-1"><Calendar className="w-4 h-4"/> 本月行程 ({new Date().getMonth() + 1}月)</div>
+                                    <div className="text-4xl font-bold">{safeStatsData.monthly?.total || 0} <span className="text-lg font-normal opacity-80">次</span></div>
+                                </div>
+                                <BarChart3 className="absolute right-[-10px] bottom-[-10px] w-24 h-24 text-white opacity-20" />
+                            </div>
+                        ) : (
+                            <div className="bg-gradient-to-br from-purple-600 to-indigo-600 rounded-xl p-6 text-white shadow-md relative overflow-hidden transition-all">
+                                <div className="relative z-10">
+                                    <div className="text-sm font-medium opacity-80 mb-1 flex items-center gap-1"><TrendingUp className="w-4 h-4"/> 本年度行程</div>
+                                    <div className="text-4xl font-bold">{safeStatsData.yearly?.total || 0} <span className="text-lg font-normal opacity-80">次</span></div>
+                                </div>
+                                <TrendingUp className="absolute right-[-10px] bottom-[-10px] w-24 h-24 text-white opacity-20" />
+                            </div>
+                        )}
+                        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                            <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                                <h3 className="font-bold text-gray-700">路線排行榜 ({statsTab === 'monthly' ? '月度' : '年度'})</h3>
+                                <button onClick={manualClearStats} className="text-red-400 p-1 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
+                            </div>
+                            {((statsTab === 'monthly' ? monthlyKeys : yearlyKeys).length === 0) ? (
+                                <div className="p-8 text-center text-gray-400 text-sm">暫無統計數據</div>
+                            ) : (
+                                <ul className="divide-y divide-gray-100">
+                                    {(statsTab === 'monthly' ? monthlyKeys : yearlyKeys).map(key => {
+                                        const t = (statsTab === 'monthly' ? safeStatsData.monthly.trips : safeStatsData.yearly.trips)[key];
+                                        return (
+                                            <li key={key} className="p-4 flex items-center justify-between hover:bg-gray-50">
+                                                <div className="flex items-center gap-3">
+                                                    <span className={`text-xs w-10 h-6 flex items-center justify-center rounded font-bold ${getCompanyColor(t.company).replace('border', '')}`}>{t.company === 'KMB' ? t.route : (t.company === 'CTB' ? 'CTB' : 'NLB')}</span>
+                                                    <div><div className="font-bold text-gray-800 flex items-center gap-2">{t.route} <span className="text-xs font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">{t.desc}</span></div><div className="text-xs text-gray-400 mt-0.5">{t.company === 'NLB' ? '嶼巴' : t.company}</div></div>
+                                                </div>
+                                                <div className="font-bold text-xl text-purple-600">{t.count}</div>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // App 2: 客量統計 (輸入介面)
+        // ==========================================
+        function BusCounterApp({ onBack, onAutoSaveRecord, statsData, setStatsData, busDatabase }) {
             const [company, setCompany] = useState('KMB');
             const [routeNumber, setRouteNumber] = useState('');
             const [currentStopIndex, setCurrentStopIndex] = useState(0); 
-            const [tripInfo, setTripInfo] = useState({ plate: '', captainId: '', captainName: '' });
+            // 新增 comment 屬性去記錄評語
+            const [tripInfo, setTripInfo] = useState({ plate: '', captainId: '', captainName: '', comment: '' });
             const [activeVariant, setActiveVariant] = useState(null);
             const [tripRecorded, setTripRecorded] = useState(false);
             const [initialPassengers, setInitialPassengers] = useState(0);
@@ -641,7 +762,6 @@
             const [includeNotesInReport, setIncludeNotesInReport] = useState(true);
             const [includeAnalysis, setIncludeAnalysis] = useState(true);
             const [showTotalPatronage, setShowTotalPatronage] = useState(true); 
-            const [statsTab, setStatsTab] = useState('monthly');
             const [history, setHistory] = useState([]);
             const [showReport, setShowReport] = useState(false);
             const [showTripSettings, setShowTripSettings] = useState(false);
@@ -650,7 +770,6 @@
             const [showNegativeCorrection, setShowNegativeCorrection] = useState(false); 
             const [negativeDeficit, setNegativeDeficit] = useState(0); 
             const [copied, setCopied] = useState(false);
-            const [showStats, setShowStats] = useState(false); 
             const [durationFormat, setDurationFormat] = useState('min'); 
             const [editingValue, setEditingValue] = useState(null); 
             const [manualInputMode, setManualInputMode] = useState('direct_base'); 
@@ -662,7 +781,7 @@
             const [showVariantSelector, setShowVariantSelector] = useState(false);
             const [routeStops, setRouteStops] = useState([]); 
             const [apiError, setApiError] = useState(null);
-            const [statsData, setStatsData] = useState({ yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: Date.now() });
+            const [autoSyncRecord, setAutoSyncRecord] = useState(true); 
             const isLoaded = useRef(false);
 
             const formatTime24 = (date = new Date()) => date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -680,26 +799,33 @@
                 return minutes;
             };
 
-            useEffect(() => {
-                const savedStats = localStorage.getItem('busCounterStats');
-                if (savedStats) {
-                    try {
-                        let parsed = JSON.parse(savedStats);
-                        parsed = checkAndResetStats(parsed);
-                        setStatsData(parsed);
-                    } catch (e) { console.error("Failed to load stats", e); }
+            const companyFleets = useMemo(() => {
+                const compData = busDatabase[COMPANY_MAPPING[company] || company];
+                if (!compData) return [];
+                const fleets = [];
+                for (const m in compData) {
+                    for (const maj in compData[m]) {
+                        for (const min in compData[m][maj]) {
+                            fleets.push(...compData[m][maj][min]);
+                        }
+                    }
                 }
+                return fleets;
+            }, [busDatabase, company]);
+
+            useEffect(() => {
                 const savedSession = localStorage.getItem('busCounterCurrentSession');
                 if (savedSession) {
                     try {
                         const session = JSON.parse(savedSession);
                         setCompany(session.company || 'KMB'); setRouteNumber(session.routeNumber || ''); setCurrentStopIndex(session.currentStopIndex || 0);
-                        setTripInfo(session.tripInfo || { plate: '', captainId: '', captainName: '' }); setActiveVariant(session.activeVariant || null);
+                        setTripInfo(session.tripInfo || { plate: '', captainId: '', captainName: '', comment: '' }); setActiveVariant(session.activeVariant || null);
                         setTripRecorded(session.tripRecorded || false); setInitialPassengers(session.initialPassengers || 0); setTotalPassengers(session.totalPassengers || 0);
                         setStopOn(session.stopOn || 0); setStopOff(session.stopOff || 0); setArrivalTime(session.arrivalTime || '');
                         setHistory(session.history || []); setRouteStops(session.routeStops || []); setCurrentNote(session.currentNote || '');
                         setIncludeNotesInReport(session.includeNotesInReport ?? true); setIncludeAnalysis(session.includeAnalysis ?? true);
-                        setShowTotalPatronage(session.showTotalPatronage ?? true); setStatsTab(session.statsTab || 'monthly');
+                        setShowTotalPatronage(session.showTotalPatronage ?? true);
+                        if(session.autoSyncRecord !== undefined) setAutoSyncRecord(session.autoSyncRecord);
                     } catch (e) {}
                 }
                 isLoaded.current = true;
@@ -708,30 +834,16 @@
             useEffect(() => {
                 if (!isLoaded.current) return;
                 const sessionData = {
-                    company, routeNumber, currentStopIndex, tripInfo, activeVariant, tripRecorded, initialPassengers, totalPassengers, stopOn, stopOff, arrivalTime, history, routeStops, currentNote, includeNotesInReport, includeAnalysis, showTotalPatronage, statsTab
+                    company, routeNumber, currentStopIndex, tripInfo, activeVariant, tripRecorded, initialPassengers, totalPassengers, stopOn, stopOff, arrivalTime, history, routeStops, currentNote, includeNotesInReport, includeAnalysis, showTotalPatronage, autoSyncRecord
                 };
                 localStorage.setItem('busCounterCurrentSession', JSON.stringify(sessionData));
-            }, [company, routeNumber, currentStopIndex, tripInfo, activeVariant, tripRecorded, initialPassengers, totalPassengers, stopOn, stopOff, arrivalTime, history, routeStops, currentNote, includeNotesInReport, includeAnalysis, showTotalPatronage, statsTab]);
-
-            const checkAndResetStats = (data) => {
-                if (!data.lastSaveTime) return data;
-                if (!data.yearly) data = { yearly: { trips: data.trips || {}, total: data.total || 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: data.lastSaveTime };
-                const lastSaveDate = new Date(data.lastSaveTime);
-                const now = new Date();
-                let yearlyResetThreshold = new Date(now.getFullYear(), 0, 1, 2, 0, 0); 
-                if (now < yearlyResetThreshold) yearlyResetThreshold = new Date(now.getFullYear() - 1, 0, 1, 2, 0, 0);
-                let monthlyResetThreshold = new Date(now.getFullYear(), now.getMonth(), 1, 2, 0, 0);
-                if (now < monthlyResetThreshold) monthlyResetThreshold = new Date(now.getFullYear(), now.getMonth() - 1, 1, 2, 0, 0);
-                let newData = { ...data }; let modified = false;
-                if (lastSaveDate < yearlyResetThreshold) { newData.yearly = { trips: {}, total: 0 }; newData.monthly = { trips: {}, total: 0 }; modified = true; }
-                else if (lastSaveDate < monthlyResetThreshold) { newData.monthly = { trips: {}, total: 0 }; modified = true; }
-                if (modified) { newData.lastSaveTime = Date.now(); localStorage.setItem('busCounterStats', JSON.stringify(newData)); }
-                return newData;
-            };
+            }, [company, routeNumber, currentStopIndex, tripInfo, activeVariant, tripRecorded, initialPassengers, totalPassengers, stopOn, stopOff, arrivalTime, history, routeStops, currentNote, includeNotesInReport, includeAnalysis, showTotalPatronage, autoSyncRecord]);
 
             const saveTripToStats = () => {
                 if (tripRecorded || !activeVariant) return; 
                 const newData = { ...statsData };
+                if (!newData.yearly) newData.yearly = { trips: {}, total: 0 };
+                if (!newData.monthly) newData.monthly = { trips: {}, total: 0 };
                 const key = `${activeVariant.company}-${activeVariant.route}-${activeVariant.description}`;
                 if (!newData.yearly.trips[key]) newData.yearly.trips[key] = { company: activeVariant.company, route: activeVariant.route, desc: activeVariant.description, count: 0 };
                 newData.yearly.trips[key].count += 1; newData.yearly.total += 1;
@@ -739,13 +851,6 @@
                 newData.monthly.trips[key].count += 1; newData.monthly.total += 1;
                 newData.lastSaveTime = Date.now();
                 setStatsData(newData); localStorage.setItem('busCounterStats', JSON.stringify(newData)); setTripRecorded(true); 
-            };
-
-            const manualClearStats = () => {
-                if (window.confirm('確定要清空所有統計資料嗎？此動作無法復原。')) {
-                    const empty = { yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: Date.now() };
-                    setStatsData(empty); localStorage.setItem('busCounterStats', JSON.stringify(empty));
-                }
             };
 
             const recalculateAll = (baseCount, currentHistory = history, currentOn = stopOn, currentOff = stopOff) => {
@@ -757,22 +862,6 @@
                 });
                 setHistory(newHistory); setInitialPassengers(baseCount);
                 setTotalPassengers(runningTotal + currentOn - currentOff);
-            };
-
-            const checkForNegativeDeficit = () => {
-                const lowestHistoryOccupancy = history.reduce((min, r) => r.isSeparator ? min : Math.min(min, r.occupancy), Infinity); 
-                return Math.max(0, -Math.min(lowestHistoryOccupancy, totalPassengers));
-            };
-            
-            const handleCorrection = () => {
-                recalculateAll(initialPassengers + negativeDeficit);
-                setNegativeDeficit(0); setShowNegativeCorrection(false); setShowReport(true);
-            };
-
-            const handleShowReport = () => {
-                const deficit = checkForNegativeDeficit();
-                if (deficit > 0) { setNegativeDeficit(deficit); setShowNegativeCorrection(true); } 
-                else { setShowReport(true); }
             };
 
             const getAnalysisData = () => {
@@ -896,27 +985,29 @@
             };
             const openResetConfirm = () => setShowResetConfirm(true);
             const performHardReset = () => {
-                resetCounter(); setRouteStops([]); setRouteNumber(''); setVariants([]); setTripInfo({ plate: '', captainId: '', captainName: '' });
+                resetCounter(); setRouteStops([]); setRouteNumber(''); setVariants([]); setTripInfo({ plate: '', captainId: '', captainName: '', comment: '' });
                 setActiveVariant(null); setApiError(null); setShowReport(false); setShowResetConfirm(false); localStorage.removeItem('busCounterCurrentSession');
             };
-            const handleFinishAndReset = () => { copyReport(); saveTripToStats(); performHardReset(); };
-            const setArrivalNow = () => setArrivalTime(formatTime24());
-            const jumpToStop = (index) => { setCurrentStopIndex(index); setStopOn(0); setStopOff(0); setArrivalTime(''); setShowStopSelector(false); setCurrentNote(''); };
-
-            const openManualInput = (type) => {
-                setEditingValue(type);
-                if (type === 'initial') { setManualInputMode('direct_base'); setManualInputValue(initialPassengers.toString()); }
-                else if (type === 'on') { setManualInputValue(stopOn.toString()); }
-                else if (type === 'off') { setManualInputValue(stopOff.toString()); }
+            
+            const handleFinishAndReset = () => { 
+                copyReport(); 
+                saveTripToStats(); 
+                if (autoSyncRecord && tripInfo.plate) {
+                    const cName = company === 'NLB' ? '新大嶼山巴士' : company === 'KMB' ? '九巴' : company === 'CTB' ? '城巴' : company;
+                    onAutoSaveRecord({ company: cName, route: routeNumber, plate: tripInfo.plate, comment: tripInfo.comment });
+                }
+                performHardReset(); 
             };
-            const saveManualInput = () => {
-                const val = parseInt(manualInputValue) || 0;
-                if (editingValue === 'initial') {
-                    if (manualInputMode === 'direct_base') recalculateAll(val);
-                    else { const currentNetChange = totalPassengers - initialPassengers; recalculateAll(val - currentNetChange); }
-                } else if (editingValue === 'on') { const diff = val - stopOn; setStopOn(val); setTotalPassengers(prev => prev + diff); } 
-                else if (editingValue === 'off') { const diff = val - stopOff; setStopOff(val); setTotalPassengers(prev => prev - diff); }
-                setEditingValue(null);
+            
+            const setArrivalNow = () => setArrivalTime(formatTime24());
+            
+            const jumpToStop = (index) => { 
+                setCurrentStopIndex(index); 
+                setStopOn(0); 
+                setStopOff(0); 
+                setArrivalTime(''); 
+                setShowStopSelector(false); 
+                setCurrentNote(''); 
             };
 
             const openHistoryEdit = (index) => {
@@ -939,13 +1030,22 @@
                 setHistory([...history, { stopNumber: currentStopIndex + 1, stopName: currentStopName, arrivalTime: arrivalTime || '-', on: stopOn, off: stopOff, occupancy: totalPassengers, timestamp: formatTime24(), note: currentNote }]);
                 setCurrentStopIndex(prev => prev + 1); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); 
             };
+            
+            // 提早結束行程功能
             const handleCompleteAndShowReport = () => {
                 saveTripToStats();
                 const currentStopName = routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`;
                 setHistory([...history, { stopNumber: currentStopIndex + 1, stopName: currentStopName, arrivalTime: arrivalTime || '-', on: stopOn, off: stopOff, occupancy: totalPassengers, timestamp: formatTime24(), note: currentNote }]);
-                setCurrentStopIndex(prev => prev + 1); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote('');
+                setCurrentStopIndex(routeStops.length); // 直接跳到最後
+                setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote('');
+                setShowStopSelector(false);
                 setShowReport(true);
             };
+            
+            const handleShowReport = () => {
+                setShowReport(true);
+            };
+
             const handlePrevStop = () => {
                 if (currentStopIndex === 0) return;
                 const newHistory = [...history]; let lastRecord = newHistory.pop();
@@ -957,11 +1057,6 @@
                     setStopOn(targetOn); setStopOff(targetOff); setArrivalTime(lastRecord.arrivalTime === '-' ? '' : lastRecord.arrivalTime); setCurrentNote(lastRecord.note || '');
                 } else { setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); }
                 setHistory(newHistory); recalculateAll(initialPassengers, newHistory, targetOn, targetOff);
-            };
-            const handleContinueTrip = () => {
-                const currentStopName = routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`;
-                setHistory([...history, { stopNumber: currentStopIndex + 1, stopName: currentStopName, arrivalTime: arrivalTime || '-', on: stopOn, off: stopOff, occupancy: totalPassengers, timestamp: formatTime24(), note: currentNote || '繼續/合併行程' }, { isSeparator: true, stopName: '--- 繼續行程 ---', arrivalTime: '-', on: 0, off: 0, occupancy: totalPassengers, note: '' }]);
-                setCurrentStopIndex(0); setStopOn(0); setStopOff(0); setArrivalTime(''); setCurrentNote(''); setRouteStops([]); setActiveVariant(null); setShowVariantSelector(true);
             };
 
             const incrementOn = () => { setStopOn(s => s + 1); setTotalPassengers(t => t + 1); };
@@ -978,36 +1073,6 @@
             };
             const formatDuration = (mins) => durationFormat === 'min' ? `${mins} 分鐘` : (Math.floor(mins / 60) > 0 ? `${Math.floor(mins / 60)}小時${mins % 60}分鐘` : `${mins % 60}分鐘`);
             const getTotalPatronage = () => { let total = initialPassengers; history.forEach(r => { if(!r.isSeparator) total += r.on; }); if (routeStops.length === 0 || currentStopIndex < routeStops.length) total += stopOn; return total; };
-
-            const exportToExcel = () => {
-                const duration = getTripDuration(); const dateStr = new Date().toLocaleDateString(); const filename = `BusReport_${routeNumber || 'Route'}_${dateStr.replace(/\//g, '-')}.xlsx`;
-                const analysisData = getAnalysisData(); const totalPatronage = getTotalPatronage();
-                const wsData = [
-                    ["巴士客量統計報告"], ["日期", dateStr], ["路線", `${company} ${routeNumber || '-'}`], ["車牌/車隊編號", tripInfo.plate || '-'], ["車長", `${tripInfo.captainId || '-'} ${tripInfo.captainName || ''}`], ["總行車時間", formatDuration(duration)], ["初始人數", initialPassengers], []
-                ];
-                if (includeAnalysis && analysisData && (analysisData.maxOnVal > 0 || analysisData.maxOccVal > 0)) {
-                    wsData.push(["*** 重點客量分析 ***"]);
-                    if (analysisData.maxOnStops.length > 0) wsData.push(["最多人上車", `${analysisData.maxOnStops.map(s => cleanStopName(s.stopName)).join(", ")} (${analysisData.maxOnVal}人)`]);
-                    if (analysisData.maxOffStops.length > 0) wsData.push(["最多人落車", `${analysisData.maxOffStops.map(s => cleanStopName(s.stopName)).join(", ")} (${analysisData.maxOffVal}人)`]);
-                    if (analysisData.formattedSegments.length > 0) wsData.push(["最高載客路段", `${analysisData.formattedSegments.join(", ")} (${analysisData.maxOccVal}人)`]);
-                    wsData.push([]); 
-                }
-                wsData.push(["時間", "站名", "上", "落", "車上", "備註"]);
-                history.forEach(record => {
-                    if (record.isSeparator) wsData.push(["--- 繼續行程 ---", "", "", "", "", ""]);
-                    else wsData.push([record.arrivalTime === '-' ? '--:--' : record.arrivalTime, cleanStopName(record.stopName), record.on, record.off, record.occupancy, record.note || '']);
-                });
-                if (routeStops.length === 0 || currentStopIndex < routeStops.length) {
-                    if (stopOn > 0 || stopOff > 0 || arrivalTime || currentNote) {
-                         wsData.push([arrivalTime || '--:--', cleanStopName(routeStops.length > 0 ? routeStops[currentStopIndex]?.name : `第 ${currentStopIndex + 1} 站`), stopOn, stopOff, totalPassengers, currentNote || '']);
-                    }
-                }
-                wsData.push([]);
-                if (showTotalPatronage) wsData.push(["總客量", totalPatronage]);
-                const ws = XLSX.utils.aoa_to_sheet(wsData);
-                ws['!cols'] = [{ wch: 10 }, { wch: 25 }, { wch: 5 }, { wch: 5 }, { wch: 8 }, { wch: 20 }];
-                const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Report"); XLSX.writeFile(wb, filename);
-            };
 
             const copyReport = () => {
                 if (currentStopIndex >= routeStops.length - 1) saveTripToStats();
@@ -1050,70 +1115,8 @@
             const getPrevStopDisplay = () => (currentStopIndex > 0 && routeStops.length > 0) ? `上一站: ${routeStops[currentStopIndex - 1].name}` : "上一站: 起點";
             const isLastStop = routeStops.length > 0 && currentStopIndex === routeStops.length - 1;
 
-            if (showStats) {
-                const yearlyKeys = Object.keys(statsData.yearly?.trips || {}).sort((a, b) => statsData.yearly.trips[b].count - statsData.yearly.trips[a].count);
-                const monthlyKeys = Object.keys(statsData.monthly?.trips || {}).sort((a, b) => statsData.monthly.trips[b].count - statsData.monthly.trips[a].count);
-                return (
-                    <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-900 relative">
-                        <header className="bg-white border-b p-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-                            <h2 className="text-xl font-bold flex items-center gap-2"><BarChart3 className="w-6 h-6 text-purple-600" /> 行程統計</h2>
-                            <button onClick={() => setShowStats(false)} className="text-purple-600 font-medium">返回</button>
-                        </header>
-                        <div className="px-4 pt-4">
-                            <div className="flex bg-gray-200 rounded-lg p-1">
-                                <button onClick={() => setStatsTab('monthly')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-all ${statsTab === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>月度統計</button>
-                                <button onClick={() => setStatsTab('yearly')} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-all ${statsTab === 'yearly' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>年度統計</button>
-                            </div>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                            {statsTab === 'monthly' ? (
-                                <div className="bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl p-6 text-white shadow-md relative overflow-hidden transition-all">
-                                    <div className="relative z-10">
-                                        <div className="text-sm font-medium opacity-80 mb-1 flex items-center gap-1"><Calendar className="w-4 h-4"/> 本月行程 ({new Date().getMonth() + 1}月)</div>
-                                        <div className="text-4xl font-bold">{statsData.monthly?.total || 0} <span className="text-lg font-normal opacity-80">次</span></div>
-                                    </div>
-                                    <BarChart3 className="absolute right-[-10px] bottom-[-10px] w-24 h-24 text-white opacity-20" />
-                                </div>
-                            ) : (
-                                <div className="bg-gradient-to-br from-purple-600 to-indigo-600 rounded-xl p-6 text-white shadow-md relative overflow-hidden transition-all">
-                                    <div className="relative z-10">
-                                        <div className="text-sm font-medium opacity-80 mb-1 flex items-center gap-1"><TrendingUp className="w-4 h-4"/> 本年度行程</div>
-                                        <div className="text-4xl font-bold">{statsData.yearly?.total || 0} <span className="text-lg font-normal opacity-80">次</span></div>
-                                    </div>
-                                    <TrendingUp className="absolute right-[-10px] bottom-[-10px] w-24 h-24 text-white opacity-20" />
-                                </div>
-                            )}
-                            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                                <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
-                                    <h3 className="font-bold text-gray-700">路線排行榜 ({statsTab === 'monthly' ? '月度' : '年度'})</h3>
-                                    <button onClick={manualClearStats} className="text-red-400 p-1 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
-                                </div>
-                                {((statsTab === 'monthly' ? monthlyKeys : yearlyKeys).length === 0) ? (
-                                    <div className="p-8 text-center text-gray-400 text-sm">暫無統計數據</div>
-                                ) : (
-                                    <ul className="divide-y divide-gray-100">
-                                        {(statsTab === 'monthly' ? monthlyKeys : yearlyKeys).map(key => {
-                                            const t = (statsTab === 'monthly' ? statsData.monthly.trips : statsData.yearly.trips)[key];
-                                            return (
-                                                <li key={key} className="p-4 flex items-center justify-between hover:bg-gray-50">
-                                                    <div className="flex items-center gap-3">
-                                                        <span className={`text-xs w-10 h-6 flex items-center justify-center rounded font-bold ${getCompanyColor(t.company).replace('border', '')}`}>{t.company === 'KMB' ? t.route : (t.company === 'CTB' ? 'CTB' : 'NLB')}</span>
-                                                        <div><div className="font-bold text-gray-800 flex items-center gap-2">{t.route} <span className="text-xs font-normal text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded-full">{t.desc}</span></div><div className="text-xs text-gray-400 mt-0.5">{t.company === 'NLB' ? '嶼巴' : t.company}</div></div>
-                                                    </div>
-                                                    <div className="font-bold text-xl text-purple-600">{t.count}</div>
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                );
-            }
-
             if (showReport) {
-                const duration = getTripDuration(); const analysisData = getAnalysisData(); const totalPatronage = getTotalPatronage();
+                const analysisData = getAnalysisData(); const totalPatronage = getTotalPatronage();
                 return (
                     <div className="flex flex-col h-screen bg-gray-50 font-sans text-gray-900 relative">
                         {editingHistoryIndex !== null && (
@@ -1172,24 +1175,107 @@
                                 {showTotalPatronage && <div className="p-4 bg-slate-50 border-t flex justify-between items-center"><span className="text-sm font-bold text-slate-500">總客量</span><span className="text-2xl font-bold text-slate-800">{totalPatronage}</span></div>}
                             </div>
                         </div>
-                        <div className="p-4 bg-white border-t pb-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] space-y-3">
-                            <div className="grid grid-cols-2 gap-3">
-                                <button onClick={copyReport} className={`w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 ${copied ? 'bg-green-600 text-white' : 'bg-blue-600 text-white'}`}>{copied ? <><Check className="w-5 h-5"/> 已複製</> : <><Copy className="w-5 h-5"/> 複製報告</>}</button>
-                                <button onClick={exportToExcel} className="w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 bg-emerald-600 text-white hover:bg-emerald-700"><FileSpreadsheet className="w-5 h-5"/> 匯出 Excel</button>
+                        
+                        {/* 乘車評語區 */}
+                        {autoSyncRecord && tripInfo.plate && (
+                            <div className="bg-blue-50 border-t border-blue-200 p-4 shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                                <label className="text-sm font-bold text-blue-800 flex items-center gap-2 mb-2">
+                                    <MessageSquare className="w-4 h-4" /> 加入評語 (將同步至搭車紀錄)
+                                </label>
+                                <textarea
+                                    rows="2"
+                                    placeholder="例如：冷氣好夠凍、車長手車好穩..."
+                                    value={tripInfo.comment || ''}
+                                    onChange={(e) => setTripInfo({...tripInfo, comment: e.target.value})}
+                                    className="w-full border border-blue-200 p-3 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none resize-none text-sm shadow-sm"
+                                />
                             </div>
-                            <button onClick={handleFinishAndReset} className="w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 bg-slate-800 text-white border border-slate-700"><CheckCircle2 className="w-5 h-5 text-green-400" /> 複製並重置</button>
+                        )}
+
+                        <div className="p-4 bg-white border-t pb-10 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] space-y-3">
+                            <button onClick={copyReport} className={`w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 ${copied ? 'bg-green-600 text-white' : 'bg-blue-600 text-white'}`}>{copied ? <><Check className="w-5 h-5"/> 已複製</> : <><Copy className="w-5 h-5"/> 複製報告</>}</button>
+                            <button onClick={handleFinishAndReset} className="w-full py-4 rounded-xl text-lg font-bold flex items-center justify-center gap-2 bg-slate-800 text-white border border-slate-700"><CheckCircle2 className="w-5 h-5 text-green-400" /> {autoSyncRecord && tripInfo.plate ? '複製、連動並重置' : '複製並重置'}</button>
                         </div>
                     </div>
                 );
             }
 
+            const renderTripSettingsModal = () => {
+                if (!showTripSettings) return null;
+                return (
+                    <div className="absolute inset-0 z-[60] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+                        <div className="bg-white rounded-xl p-5 w-full max-w-sm shadow-2xl">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-lg font-bold flex items-center gap-2 text-slate-800"><Settings className="w-5 h-5" /> 行程資料設定</h3>
+                                <button onClick={() => setShowTripSettings(false)} className="text-sm text-blue-600 font-bold">關閉</button>
+                            </div>
+                            <div className="space-y-4 mb-6">
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">車隊編號/車牌</label>
+                                    <AutocompleteInput
+                                        value={tripInfo.plate || ''}
+                                        onChange={(val) => setTripInfo({...tripInfo, plate: val.toUpperCase()})}
+                                        options={companyFleets}
+                                        placeholder="例如: 8123 或者 SE6"
+                                        className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-3 mt-4">
+                                    <div><label className="text-xs font-bold text-gray-500 uppercase mb-1 block">車長編號</label><input type="text" className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2 pl-3" value={tripInfo.captainId} onChange={(e) => setTripInfo({...tripInfo, captainId: e.target.value})} /></div>
+                                    <div><label className="text-xs font-bold text-gray-500 uppercase mb-1 block">車長姓氏</label><input type="text" className="w-full bg-slate-50 border border-slate-300 rounded-lg py-2 pl-3" value={tripInfo.captainName} onChange={(e) => setTripInfo({...tripInfo, captainName: e.target.value})} /></div>
+                                </div>
+                                <div className="pt-2 border-t mt-2 flex items-center justify-between">
+                                    <label className="text-sm font-bold text-gray-700 flex items-center gap-2"><ClipboardList className="w-4 h-4"/> 結束時自動加入搭車紀錄</label>
+                                    <input type="checkbox" checked={autoSyncRecord} onChange={(e) => setAutoSyncRecord(e.target.checked)} className="w-5 h-5 text-blue-600" />
+                                </div>
+                                {autoSyncRecord && <p className="text-xs text-gray-400">系統會用你輸入嘅車隊編號自動幫你入庫。評語可於生成報告時填寫。</p>}
+                            </div>
+                            <button onClick={() => setShowTripSettings(false)} className="w-full py-3 bg-blue-600 text-white rounded-xl font-bold">確認並儲存</button>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderStopSelectorModal = () => {
+                if (!showStopSelector) return null;
+                return (
+                    <div className="absolute inset-0 z-50 bg-black/60 flex items-end justify-center backdrop-blur-sm animate-in slide-in-from-bottom duration-200">
+                        <div className="bg-white w-full h-[80vh] rounded-t-3xl flex flex-col shadow-2xl">
+                            <div className="p-4 border-b flex justify-between items-center bg-slate-50 rounded-t-3xl sticky top-0 z-10">
+                                <h3 className="font-bold text-lg flex items-center gap-2"><MapPin className="text-blue-600"/> 選擇跳轉站點</h3>
+                                <button onClick={() => setShowStopSelector(false)} className="bg-gray-200 p-1.5 rounded-full text-gray-600 hover:bg-gray-300"><X size={20}/></button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-2 pb-4">
+                                {routeStops.map((stop, idx) => (
+                                    <button key={idx} onClick={() => jumpToStop(idx)} className={`w-full text-left p-4 border-b border-gray-100 flex items-center gap-3 active:bg-blue-50 transition-colors ${currentStopIndex === idx ? 'bg-blue-50 text-blue-700 font-bold' : 'text-gray-700 hover:bg-gray-50'}`}>
+                                        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shadow-sm ${currentStopIndex === idx ? 'bg-blue-600 text-white' : 'bg-white border text-gray-500'}`}>{idx + 1}</span>
+                                        <span className="flex-1">{stop.name}</span>
+                                        {currentStopIndex === idx && <Check size={18} className="text-blue-600"/>}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
             return (
-                <div className="flex flex-col h-full bg-slate-100 font-sans text-gray-900 overflow-hidden relative max-w-md mx-auto shadow-xl">
+                <div className="flex flex-col h-full bg-slate-100 font-sans text-gray-900 overflow-hidden relative mx-auto shadow-xl">
+                    {renderTripSettingsModal()}
+                    {renderStopSelectorModal()}
+                    
                     <header className="bg-slate-800 text-white p-3 shadow-md flex-none z-20">
                         <div className="flex items-center gap-3 mb-3">
-                            <button onClick={onBack} className="p-2 rounded-full hover:bg-slate-700 text-slate-300 transition-colors"><ArrowLeft size={20} /></button>
-                            <h1 className="text-lg font-bold flex items-center gap-2"><BusFront size={20} className="text-blue-400"/> 客量統計</h1>
+                            <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-slate-700 text-slate-300 transition-colors"><ArrowLeft size={24} /></button>
+                            <h1 className="text-xl font-bold flex items-center gap-2"><BusFront size={24} className="text-blue-400"/> 客量統計</h1>
+                            
+                            {/* 右上角預覽報告按鈕回歸 */}
+                            <div className="ml-auto flex gap-2">
+                                <button onClick={openResetConfirm} className="p-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-full"><RotateCcw className="w-5 h-5" /></button>
+                                <button onClick={handleShowReport} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg text-sm font-medium flex items-center gap-1 shadow-md active:scale-95"><FileText className="w-5 h-5" /></button>
+                            </div>
                         </div>
+
                         <div className="flex justify-between items-start mb-3 gap-2">
                             <div className="flex-1 flex gap-2">
                                 <button onClick={toggleCompany} className={`px-2 rounded font-bold text-xs flex items-center justify-center min-w-[50px] border shadow-sm active:scale-95 ${getCompanyColor(company)}`}>{company === 'KMB' ? '九巴' : company === 'CTB' ? '城巴' : '嶼巴'}</button>
@@ -1197,8 +1283,7 @@
                                 <button onClick={searchRoute} disabled={isLoading || !routeNumber} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-3 rounded flex items-center justify-center shadow-md"><Search className="w-5 h-5" /></button>
                             </div>
                             <div className="flex items-center gap-2">
-                                <button onClick={openResetConfirm} className="p-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-full"><RotateCcw className="w-5 h-5" /></button>
-                                <button onClick={handleShowReport} className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded-lg text-sm font-medium flex items-center gap-1 shadow-md active:scale-95"><FileText className="w-5 h-5" /></button>
+                                <button onClick={() => setShowTripSettings(true)} className="p-2 text-slate-300 hover:text-white bg-slate-700 rounded-lg flex items-center gap-1"><Settings className="w-5 h-5" /> <span className="text-xs font-bold uppercase hidden sm:block">設定</span></button>
                             </div>
                         </div>
                         {showVariantSelector && (
@@ -1214,15 +1299,16 @@
                                 ))}
                             </div>
                         )}
-                        <div className="bg-slate-700 rounded-xl p-3 flex justify-between items-center border border-slate-600 relative overflow-hidden shadow-inner">
-                            <div className="flex-1 min-w-0 pr-2">
-                                <div className="text-slate-400 text-[10px] mb-0.5 uppercase font-bold flex items-center gap-1">當前站點 <List className="w-3 h-3" /></div>
+                        <div className="bg-slate-700 rounded-xl p-2 flex justify-between items-center border border-slate-600 relative overflow-hidden shadow-inner">
+                            {/* 明確顯示跳站功能 */}
+                            <div onClick={() => routeStops.length > 0 && setShowStopSelector(true)} className="flex-1 min-w-0 pr-2 cursor-pointer active:opacity-70 group hover:bg-slate-600 p-1 -m-1 rounded-lg transition-colors">
+                                <div className="text-slate-400 text-[10px] mb-0.5 uppercase font-bold flex items-center gap-1 group-hover:text-blue-300 transition-colors">當前站點 (按此跳站) <ChevronDown className="w-3 h-3" /></div>
                                 <div className="flex items-center gap-2">
                                     <div className={`min-w-[1.8rem] h-7 rounded flex items-center justify-center font-bold text-sm shadow-sm px-1 ${getCompanyColor(company).replace(/border-\w+/, '').replace(/text-\w+/, '')}`.trim()}>{currentStopIndex + 1}</div>
-                                    <span className="text-white font-bold text-lg truncate leading-tight">{getCurrentStopDisplay()}</span>
+                                    <span className="text-white font-bold text-lg truncate leading-tight group-hover:text-blue-100">{getCurrentStopDisplay()}</span>
                                 </div>
                             </div>
-                            <div className="text-right">
+                            <div className="text-right pl-2 border-l border-slate-600">
                                 <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-end gap-1 uppercase font-bold">車上人數</div>
                                 <div className={`text-3xl font-mono font-bold leading-none ${totalPassengers < 0 ? 'text-red-400' : 'text-white'}`}>{totalPassengers}</div>
                             </div>
@@ -1249,15 +1335,26 @@
                                 <button onClick={decrementOff} disabled={stopOff === 0} className="absolute bottom-3 right-3 w-10 h-10 rounded-full bg-slate-100 text-slate-400 hover:text-green-500 flex items-center justify-center z-10"><Minus className="w-5 h-5" /></button>
                             </div>
                         </div>
+                        
+                        {/* 底部快捷按鈕區 (捷徑列) */}
                         <div className="flex-none pt-1 pb-1">
                             <div className="flex flex-col gap-2">
                                 <div className="flex gap-2 h-14">
-                                    <button onClick={handlePrevStop} disabled={currentStopIndex === 0} className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl shadow flex flex-col items-center justify-center disabled:opacity-50">
-                                        <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-slate-400">Previous</div>
-                                        <div className="text-base font-bold flex items-center gap-1"><ChevronLeft className="w-4 h-4" /> {getPrevStopDisplay().replace('上一站: ', '')}</div>
+                                    <button onClick={handlePrevStop} disabled={currentStopIndex === 0} className="w-1/3 bg-slate-200 hover:bg-slate-300 text-slate-600 rounded-xl shadow flex flex-col items-center justify-center disabled:opacity-50 active:scale-95 transition-transform">
+                                        <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-slate-400">Prev</div>
+                                        <div className="text-sm font-bold flex items-center gap-1"><ChevronLeft className="w-4 h-4" /> 上一站</div>
+                                    </button>
+                                    <button onClick={handleShowReport} className="w-1/3 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl shadow flex flex-col items-center justify-center active:scale-95 transition-transform">
+                                        <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-blue-400">Preview</div>
+                                        <div className="text-sm font-bold flex items-center gap-1"><FileText className="w-4 h-4" /> 預覽</div>
+                                    </button>
+                                    <button onClick={handleCompleteAndShowReport} disabled={routeStops.length === 0} className="w-1/3 bg-red-100 hover:bg-red-200 text-red-700 rounded-xl shadow flex flex-col items-center justify-center disabled:opacity-50 active:scale-95 transition-transform">
+                                        <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-red-400">End</div>
+                                        <div className="text-sm font-bold flex items-center gap-1"><StopCircle className="w-4 h-4" /> 提早結束</div>
                                     </button>
                                 </div>
-                                <button onClick={isLastStop ? handleCompleteAndShowReport : handleNextStop} className="w-full h-14 bg-slate-800 text-white rounded-xl shadow-lg flex flex-col items-center justify-center px-4">
+                                
+                                <button onClick={isLastStop ? handleCompleteAndShowReport : handleNextStop} className="w-full h-14 bg-slate-800 text-white rounded-xl shadow-lg flex flex-col items-center justify-center px-4 active:scale-[0.98] transition-transform">
                                     <div className="text-[9px] font-bold uppercase tracking-wider mb-0.5 text-slate-400">{isLastStop ? 'End Trip' : 'Next Action'}</div>
                                     <div className="text-xl font-bold text-yellow-400 flex items-center gap-1">
                                         {isLastStop ? '完成並結束' : getNextStopDisplay()} <ChevronRight className="w-5 h-5" />
@@ -1271,69 +1368,187 @@
         }
 
         // ==========================================
-        // 主選單介面 (Main Menu)
+        // 主選單 (Landing Page) - 包含所有回顧
         // ==========================================
-        function MainMenu({ onSelect }) {
+        function MainMenu({ onSelect, records, statsData }) {
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, '0');
+            const thisMonthPrefix = `${yyyy}-${mm}`;
+            const thisMonthRides = records.filter(r => r.date && r.date.startsWith(thisMonthPrefix)).length;
+            const safeStatsData = statsData || { monthly: { total: 0 } };
+            const thisMonthTrips = safeStatsData.monthly?.total || 0;
+
             return (
-                <div className="h-full w-full max-w-md mx-auto bg-slate-50 flex flex-col items-center justify-center px-6 font-sans relative overflow-hidden shadow-2xl">
-                    {/* 背景裝飾 */}
-                    <div className="absolute top-[-10%] left-[-10%] w-64 h-64 bg-blue-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
-                    <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-yellow-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
-                    <div className="absolute bottom-[-20%] left-[20%] w-64 h-64 bg-pink-300 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
-                    
-                    <div className="z-10 w-full mb-10 text-center">
-                        <div className="inline-flex items-center justify-center w-20 h-20 bg-white rounded-2xl shadow-xl mb-6 border border-slate-100">
-                            <BusFront size={40} className="text-blue-600" />
+                <div className="h-full w-full max-w-md mx-auto bg-slate-50 flex flex-col font-sans relative overflow-y-auto overflow-x-hidden pb-10 shadow-2xl">
+                    <div className="z-10 w-full text-center py-10 bg-white border-b border-gray-200 shadow-sm sticky top-0">
+                        <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 rounded-2xl mb-4 text-blue-600 shadow-inner">
+                            <BusFront size={32} />
                         </div>
-                        <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight mb-2">公共交通工具包</h1>
-                        <p className="text-slate-500 font-medium">請選擇你要使用的工具</p>
+                        <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">客量統計與乘車紀錄</h1>
                     </div>
 
-                    <div className="z-10 w-full space-y-4">
-                        <button 
-                            onClick={() => onSelect('app1')} 
-                            className="w-full text-left bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-lg transition-all active:scale-[0.98] group flex items-start gap-4"
-                        >
-                            <div className="bg-yellow-100 text-yellow-600 p-3 rounded-xl group-hover:scale-110 transition-transform"><MessageSquare size={28} /></div>
-                            <div className="flex-1">
-                                <h2 className="text-xl font-bold text-slate-800 mb-1">坐車紀錄</h2>
-                                <p className="text-sm text-slate-500 leading-relaxed">記錄個人乘車體驗、車型、車隊編號及冷氣等評語，建立私人搭車資料庫。</p>
-                            </div>
-                        </button>
+                    <div className="px-5 mt-6 mb-2">
+                        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2 mb-3"><Plus size={16}/> 進入工具</h2>
+                        <div className="grid grid-cols-2 gap-3">
+                            <button onClick={() => onSelect('app2')} className="text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all active:scale-[0.98] group flex flex-col items-start gap-3">
+                                <div className="bg-blue-100 text-blue-600 p-2 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors"><Users size={24} /></div>
+                                <div><h3 className="font-bold text-slate-800 mb-1">客量統計</h3><p className="text-xs text-slate-500">數客、匯出報表</p></div>
+                            </button>
+                            <button onClick={() => onSelect('app1')} className="text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all active:scale-[0.98] group flex flex-col items-start gap-3">
+                                <div className="bg-yellow-100 text-yellow-600 p-2 rounded-xl group-hover:bg-yellow-500 group-hover:text-white transition-colors"><ClipboardList size={24} /></div>
+                                <div><h3 className="font-bold text-slate-800 mb-1">搭車紀錄</h3><p className="text-xs text-slate-500">留低車務筆記</p></div>
+                            </button>
+                        </div>
+                    </div>
 
-                        <button 
-                            onClick={() => onSelect('app2')} 
-                            className="w-full text-left bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:shadow-lg transition-all active:scale-[0.98] group flex items-start gap-4"
-                        >
-                            <div className="bg-blue-100 text-blue-600 p-3 rounded-xl group-hover:scale-110 transition-transform"><Users size={28} /></div>
-                            <div className="flex-1">
-                                <h2 className="text-xl font-bold text-slate-800 mb-1">客量統計</h2>
-                                <p className="text-sm text-slate-500 leading-relaxed">即時統計每站上下車人數，分析高低客量路段並匯出 Excel 詳細報告。</p>
+                    <div className="px-5 mt-8">
+                        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2 mb-3"><History size={16}/> 數據回顧與統計</h2>
+                        <div className="space-y-3">
+                            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm relative overflow-hidden group hover:border-yellow-300 transition-colors">
+                                <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><BarChart3 size={72}/></div>
+                                <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><ClipboardList size={18} className="text-yellow-500"/> 搭車紀錄統計</h3>
+                                <p className="text-3xl font-extrabold text-blue-600 mb-1">{thisMonthRides} <span className="text-sm font-normal text-gray-500">次 (本月)</span></p>
+                                <p className="text-xs text-gray-400 mb-4">累積總紀錄：{records.length} 條</p>
+                                <button onClick={() => onSelect('stats1')} className="w-full bg-yellow-50 text-yellow-700 font-bold py-3 rounded-xl hover:bg-yellow-100 transition-colors flex items-center justify-center gap-1 active:scale-95 shadow-sm">查看詳細統計 <ChevronRight size={16}/></button>
                             </div>
-                        </button>
+
+                            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm relative overflow-hidden group hover:border-blue-300 transition-colors">
+                                <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><Users size={72}/></div>
+                                <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><Users size={18} className="text-blue-500"/> 客量統計回顧</h3>
+                                <p className="text-3xl font-extrabold text-purple-600 mb-1">{thisMonthTrips} <span className="text-sm font-normal text-gray-500">次 (本月)</span></p>
+                                <p className="text-xs text-gray-400 mb-4">累積總行程：{safeStatsData.yearly?.total || 0} 次 (本年)</p>
+                                <button onClick={() => onSelect('stats2')} className="w-full bg-blue-50 text-blue-700 font-bold py-3 rounded-xl hover:bg-blue-100 transition-colors flex items-center justify-center gap-1 active:scale-95 shadow-sm">查看路線排行榜 <ChevronRight size={16}/></button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             );
         }
 
         // ==========================================
-        // 總管與路由 (Main App Router)
+        // 根元件 (Root App) - 管理全局狀態
         // ==========================================
         function App() {
-            const [currentApp, setCurrentApp] = useState('menu'); // 'menu', 'app1', 'app2'
-
-            if (currentApp === 'app1') {
-                return <RideRecordApp onBack={() => setCurrentApp('menu')} />;
-            }
+            const [currentApp, setCurrentApp] = useState('menu');
             
-            if (currentApp === 'app2') {
-                return <BusCounterApp onBack={() => setCurrentApp('menu')} />;
-            }
+            const [records, setRecords] = useState(() => JSON.parse(localStorage.getItem('bus_records') || '[]'));
+            const [busDatabase, setBusDatabase] = useState({});
+            const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('google_sheet_url') || DEFAULT_SHEET_URL);
+            const [isLoadingDB, setIsLoadingDB] = useState(false);
+            const [dbError, setDbError] = useState('');
+            
+            const [busCounterStats, setBusCounterStats] = useState(() => {
+                const saved = localStorage.getItem('busCounterStats');
+                if (saved) {
+                    try { return JSON.parse(saved); } catch (e) {}
+                }
+                return { yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: Date.now() };
+            });
 
-            return <MainMenu onSelect={setCurrentApp} />;
+            useEffect(() => { localStorage.setItem('bus_records', JSON.stringify(records)); }, [records]);
+            useEffect(() => { fetchDatabase(sheetUrl); }, [sheetUrl]);
+
+            const fetchDatabase = async (url) => {
+                if (!url) return;
+                setIsLoadingDB(true); setDbError('');
+                try {
+                    const res = await fetch(url);
+                    if (!res.ok) throw new Error(`連線失敗`);
+                    const text = await res.text();
+                    const lines = text.split(/\r?\n/).slice(1);
+                    const newDb = {};
+                    lines.forEach(line => {
+                        if (!line.trim()) return;
+                        const parts = []; let cur = ''; let inQuote = false;
+                        for (let j = 0; j < line.length; j++) {
+                            if (line[j] === '"') inQuote = !inQuote;
+                            else if (line[j] === ',' && !inQuote) { parts.push(cur); cur = ''; }
+                            else cur += line[j];
+                        }
+                        parts.push(cur);
+                        if (parts.length < 5) return; 
+                        const rawCompany = parts[0]?.replace(/^"|"$/g, '').trim();
+                        const maker = parts[1]?.replace(/^"|"$/g, '').trim();
+                        const majorModel = parts[2]?.replace(/^"|"$/g, '').trim(); 
+                        const minorModel = parts[3]?.replace(/^"|"$/g, '').trim(); 
+                        const fleetNum = parts[4]?.replace(/^"|"$/g, '').trim(); 
+                        const plateNum = parts[5]?.replace(/^"|"$/g, '').trim(); 
+                        if (!rawCompany || !maker || !minorModel || !fleetNum) return;
+                        const company = COMPANY_MAPPING[rawCompany.toUpperCase()] || rawCompany;
+                        let displayBusId = plateNum ? `${fleetNum} (${plateNum})` : fleetNum;
+                        
+                        if (!newDb[company]) newDb[company] = {};
+                        if (!newDb[company][maker]) newDb[company][maker] = {};
+                        if (!newDb[company][maker][majorModel || minorModel]) newDb[company][maker][majorModel || minorModel] = {};
+                        if (!newDb[company][maker][majorModel || minorModel][minorModel]) newDb[company][maker][majorModel || minorModel][minorModel] = [];
+                        if (!newDb[company][maker][majorModel || minorModel][minorModel].includes(displayBusId)) {
+                            newDb[company][maker][majorModel || minorModel][minorModel].push(displayBusId);
+                        }
+                    });
+                    setBusDatabase(newDb);
+                } catch (e) { setDbError(e.message); } finally { setIsLoadingDB(false); }
+            };
+
+            const handleAutoSaveRecord = ({ company, route, plate, comment }) => {
+                let maker = '', majorModel = '', minorModel = '';
+                let exactMatchedPlate = plate; 
+
+                const compData = busDatabase[company];
+                if (compData) {
+                    for(const mkr in compData) {
+                        for(const maj in compData[mkr]) {
+                            for(const min in compData[mkr][maj]) {
+                                const foundPlate = compData[mkr][maj][min].find(b => b.toUpperCase().includes(plate.toUpperCase()));
+                                if (foundPlate) {
+                                    maker = mkr; majorModel = maj; minorModel = min;
+                                    exactMatchedPlate = foundPlate; 
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // 處理評語邏輯，加入預設提示
+                const defaultTag = `由客量統計自動匯入 (路線: ${route})`;
+                const finalComment = comment && comment.trim() !== '' ? `${comment}\n(${defaultTag})` : defaultTag;
+                
+                const newRecord = { 
+                    id: Date.now().toString(), 
+                    date: new Date().toISOString().split('T')[0], 
+                    company, 
+                    specificBus: exactMatchedPlate,
+                    maker, majorModel, minorModel, model: minorModel, 
+                    comment: finalComment 
+                };
+                setRecords(prev => [newRecord, ...prev]);
+            };
+
+            const manualClearStats = () => {
+                if (window.confirm('確定要清空所有統計資料嗎？此動作無法復原。')) {
+                    const empty = { yearly: { trips: {}, total: 0 }, monthly: { trips: {}, total: 0 }, lastSaveTime: Date.now() };
+                    setBusCounterStats(empty);
+                    localStorage.setItem('busCounterStats', JSON.stringify(empty));
+                }
+            };
+            
+            const getCompanyColor = (comp) => comp === 'KMB' ? 'bg-red-600 border-red-700 text-white' : comp === 'CTB' ? 'bg-yellow-400 border-yellow-500 text-black' : comp === 'NLB' ? 'bg-teal-600 border-teal-700 text-white' : 'bg-gray-400 border-gray-500 text-white';
+
+            return (
+                <>
+                    <datalist id="known-plates">
+                        {Array.from(new Set(records.map(r => r.specificBus).filter(Boolean))).sort().map(p => <option key={p} value={p} />)}
+                    </datalist>
+
+                    {currentApp === 'app1' && <RideRecordApp onBack={() => setCurrentApp('menu')} records={records} setRecords={setRecords} busDatabase={busDatabase} sheetUrl={sheetUrl} setSheetUrl={setSheetUrl} fetchDatabase={fetchDatabase} isLoadingDB={isLoadingDB} dbError={dbError} />}
+                    {currentApp === 'app2' && <BusCounterApp onBack={() => setCurrentApp('menu')} onAutoSaveRecord={handleAutoSaveRecord} statsData={busCounterStats} setStatsData={setBusCounterStats} busDatabase={busDatabase} />}
+                    {currentApp === 'stats1' && <RideRecordStats onBack={() => setCurrentApp('menu')} records={records} busDatabase={busDatabase} />}
+                    {currentApp === 'stats2' && <BusCounterStats onBack={() => setCurrentApp('menu')} statsData={busCounterStats} manualClearStats={manualClearStats} getCompanyColor={getCompanyColor} />}
+                    {currentApp === 'menu' && <MainMenu onSelect={setCurrentApp} records={records} statsData={busCounterStats} />}
+                </>
+            );
         }
 
-        // 將組件渲染到根節點
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
