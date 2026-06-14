@@ -93,7 +93,6 @@
                         const result = await response.json();
                         let text = result.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
                         if (text && text !== "NONE") {
-                            // 過濾只剩英文同數字
                             resolve(text.replace(/[^a-zA-Z0-9]/g, '').toUpperCase());
                         } else {
                             resolve(null);
@@ -961,6 +960,7 @@
             const [stopOff, setStopOff] = useState(0);
             const [arrivalTime, setArrivalTime] = useState('');
             const [currentNote, setCurrentNote] = useState('');
+            const [showNoteInput, setShowNoteInput] = useState(false);
             const [includeNotesInReport, setIncludeNotesInReport] = useState(true);
             const [includeAnalysis, setIncludeAnalysis] = useState(true);
             const [showTotalPatronage, setShowTotalPatronage] = useState(true); 
@@ -968,7 +968,13 @@
             const [showReport, setShowReport] = useState(false);
             const [showTripSettings, setShowTripSettings] = useState(false);
             const [showStopSelector, setShowStopSelector] = useState(false);
+            
+            // 手動修改人數 & Reset State
+            const [showManualInput, setShowManualInput] = useState(false);
+            const [manualInputMode, setManualInputMode] = useState('base'); 
+            const [manualInputValue, setManualInputValue] = useState('');
             const [showResetConfirm, setShowResetConfirm] = useState(false);
+
             const [copied, setCopied] = useState(false);
             const [durationFormat, setDurationFormat] = useState('min'); 
             const [editingHistoryIndex, setEditingHistoryIndex] = useState(null);
@@ -1213,7 +1219,7 @@
 
             const resetCounter = () => {
                 setCurrentStopIndex(0); setInitialPassengers(0); setTotalPassengers(0); setStopOn(0); setStopOff(0); setArrivalTime('');
-                setHistory([]); setNegativeDeficit(0); setShowNegativeCorrection(false); setTripRecorded(false); setCurrentNote(''); 
+                setHistory([]); setTripRecorded(false); setCurrentNote(''); 
             };
             const openResetConfirm = () => setShowResetConfirm(true);
             const performHardReset = () => {
@@ -1294,6 +1300,24 @@
             const decrementOn = () => { if (stopOn > 0) { setStopOn(s => s - 1); setTotalPassengers(t => t - 1); }};
             const incrementOff = () => { setStopOff(s => s + 1); setTotalPassengers(t => t - 1); };
             const decrementOff = () => { if (stopOff > 0) { setStopOff(s => s - 1); setTotalPassengers(t => t + 1); }};
+
+            // 處理手動校準人數
+            const handleManualInputSubmit = () => {
+                const val = parseInt(manualInputValue);
+                if (isNaN(val)) return;
+                if (manualInputMode === 'base') {
+                    recalculateAll(val, history, stopOn, stopOff);
+                } else if (manualInputMode === 'current') {
+                    const diff = val - totalPassengers;
+                    if (diff > 0) {
+                        setStopOn(prev => prev + diff);
+                    } else if (diff < 0) {
+                        setStopOff(prev => prev - diff);
+                    }
+                    setTotalPassengers(val);
+                }
+                setShowManualInput(false);
+            };
 
             const getTripDuration = () => {
                 if (history.length === 0) return 0;
@@ -1504,15 +1528,49 @@
                     {renderTripSettingsModal()}
                     {renderStopSelectorModal()}
                     
+                    {/* 手動校準人數 Modal */}
+                    {showManualInput && (
+                        <div className="absolute inset-0 z-[80] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+                            <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+                                <div className="flex bg-gray-100 p-1">
+                                    <button onClick={() => { setManualInputMode('base'); setManualInputValue(initialPassengers.toString()); }} className={`flex-1 py-2.5 text-sm font-bold rounded-xl transition-all ${manualInputMode === 'base' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>修改初始值</button>
+                                    <button onClick={() => { setManualInputMode('current'); setManualInputValue(totalPassengers.toString()); }} className={`flex-1 py-2.5 text-sm font-bold rounded-xl transition-all ${manualInputMode === 'current' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500'}`}>校準當前人數</button>
+                                </div>
+                                <div className="p-6 text-center">
+                                    <h3 className="text-lg font-bold text-gray-800 mb-4">{manualInputMode === 'base' ? '設定初始人數 (Base)' : '校準當前人數'}</h3>
+                                    <input type="number" value={manualInputValue} onChange={e => setManualInputValue(e.target.value)} className="w-full text-center text-5xl font-bold font-mono border-b-4 border-blue-500 focus:outline-none pb-2 mb-6 bg-transparent" autoFocus />
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button onClick={() => setShowManualInput(false)} className="py-3 bg-gray-100 text-gray-600 rounded-xl font-bold">取消</button>
+                                        <button onClick={handleManualInputSubmit} className="py-3 bg-blue-600 text-white rounded-xl font-bold shadow-md">確認</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Reset 確認 Modal */}
+                    {showResetConfirm && (
+                        <div className="absolute inset-0 z-[80] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+                            <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
+                                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4"><RotateCcw className="w-8 h-8 text-red-600" /></div>
+                                <h3 className="text-xl font-bold text-gray-900 mb-2">確定要重置嗎？</h3>
+                                <p className="text-sm text-gray-500 mb-6">這將會清除當前所有行程紀錄及人數，且無法復原。</p>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button onClick={() => setShowResetConfirm(false)} className="py-3 bg-gray-100 text-gray-700 rounded-xl font-bold">取消</button>
+                                    <button onClick={performHardReset} className="py-3 bg-red-600 text-white rounded-xl font-bold shadow-md">確定重置</button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    
                     <header className="bg-slate-800 text-white p-3 shadow-md flex-none z-20">
                         <div className="flex items-center gap-3 mb-3">
                             <button onClick={onBack} className="p-2 -ml-2 rounded-full hover:bg-slate-700 text-slate-300 transition-colors"><ArrowLeft size={24} /></button>
                             <h1 className="text-xl font-bold flex items-center gap-2"><BusFront size={24} className="text-blue-400"/> 客量統計</h1>
                             
-                            {/* 右上角預覽報告按鈕回歸 */}
                             <div className="ml-auto flex gap-2">
-                                <button onClick={openResetConfirm} className="p-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-full"><RotateCcw className="w-5 h-5" /></button>
-                                <button onClick={handleShowReport} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg text-sm font-medium flex items-center gap-1 shadow-md active:scale-95"><FileText className="w-5 h-5" /></button>
+                                <button onClick={openResetConfirm} className="p-2 text-slate-400 hover:text-white bg-slate-700/50 rounded-full transition-colors"><RotateCcw className="w-5 h-5" /></button>
+                                <button onClick={handleShowReport} className="bg-blue-600 hover:bg-blue-500 p-2 rounded-lg text-sm font-medium flex items-center gap-1 shadow-md active:scale-95 transition-transform"><FileText className="w-5 h-5" /></button>
                             </div>
                         </div>
 
@@ -1540,7 +1598,6 @@
                             </div>
                         )}
                         <div className="bg-slate-700 rounded-xl p-2 flex justify-between items-center border border-slate-600 relative overflow-hidden shadow-inner">
-                            {/* 明確顯示跳站功能 */}
                             <div onClick={() => routeStops.length > 0 && setShowStopSelector(true)} className="flex-1 min-w-0 pr-2 cursor-pointer active:opacity-70 group hover:bg-slate-600 p-1 -m-1 rounded-lg transition-colors">
                                 <div className="text-slate-400 text-[10px] mb-0.5 uppercase font-bold flex items-center gap-1 group-hover:text-blue-300 transition-colors">當前站點 (按此跳站) <ChevronDown className="w-3 h-3" /></div>
                                 <div className="flex items-center gap-2">
@@ -1548,13 +1605,31 @@
                                     <span className="text-white font-bold text-lg truncate leading-tight group-hover:text-blue-100">{getCurrentStopDisplay()}</span>
                                 </div>
                             </div>
-                            <div className="text-right pl-2 border-l border-slate-600">
-                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-end gap-1 uppercase font-bold">車上人數</div>
-                                <div className={`text-3xl font-mono font-bold leading-none ${totalPassengers < 0 ? 'text-red-400' : 'text-white'}`}>{totalPassengers}</div>
+                            
+                            {/* 點擊觸發更改數字 Modal */}
+                            <div onClick={() => { setManualInputMode('current'); setManualInputValue(totalPassengers.toString()); setShowManualInput(true); }} className="text-right pl-2 border-l border-slate-600 cursor-pointer hover:bg-slate-600 p-1 -my-1 rounded-lg transition-colors group">
+                                <div className="text-[10px] text-slate-400 mb-0.5 flex items-center justify-end gap-1 uppercase font-bold group-hover:text-blue-300 transition-colors">車上人數 <Pencil className="w-3 h-3"/></div>
+                                <div className={`text-3xl font-mono font-bold leading-none group-hover:text-blue-100 transition-colors ${totalPassengers < 0 ? 'text-red-400' : 'text-white'}`}>{totalPassengers}</div>
                             </div>
                         </div>
                     </header>
                     <main className="flex-1 flex flex-col p-3 gap-3 overflow-hidden relative bg-slate-100">
+                        
+                        {/* 手動輸入時間及備註列回歸 */}
+                        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-2 flex gap-2 items-center flex-none">
+                            <Clock className="w-5 h-5 text-gray-400 ml-1 shrink-0" />
+                            <input type="time" value={arrivalTime} onChange={e => setArrivalTime(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 text-sm flex-1 font-mono outline-none focus:ring-2 focus:ring-blue-400" />
+                            <button onClick={setArrivalNow} className="bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-bold active:scale-95 transition-transform shrink-0">現在</button>
+                            <div className="w-px h-6 bg-gray-200 mx-1 shrink-0"></div>
+                            <button onClick={() => setShowNoteInput(!showNoteInput)} className={`p-1.5 rounded-lg transition-colors shrink-0 ${currentNote || showNoteInput ? 'text-blue-600 bg-blue-50' : 'text-gray-400 hover:bg-gray-100'}`}><StickyNote className="w-5 h-5" /></button>
+                        </div>
+                        
+                        {showNoteInput && (
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-2 animate-in fade-in slide-in-from-top-2 flex-none">
+                                <input type="text" placeholder="輸入此站備註 (如: 拖卡/頂閘)..." value={currentNote} onChange={e => setCurrentNote(e.target.value)} className="w-full bg-yellow-50/50 border border-yellow-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400" autoFocus />
+                            </div>
+                        )}
+
                         <div className="flex-1 grid grid-cols-2 gap-3 min-h-0">
                             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden relative group">
                                 <div className="bg-green-50 py-2 text-center border-b border-green-100 px-2"><span className="text-green-700 text-sm font-extrabold uppercase tracking-wide">上車</span></div>
@@ -1576,7 +1651,6 @@
                             </div>
                         </div>
                         
-                        {/* 底部快捷按鈕區 (捷徑列) */}
                         <div className="flex-none pt-1 pb-1">
                             <div className="flex flex-col gap-2">
                                 <div className="flex gap-2 h-14">
@@ -1608,7 +1682,7 @@
         }
 
         // ==========================================
-        // 主選單 (Landing Page) - 包含所有回顧
+        // 主選單 (Landing Page) - 全新設計還原截圖
         // ==========================================
         function MainMenu({ onSelect, records, statsData }) {
             const now = new Date();
@@ -1620,45 +1694,53 @@
             const thisMonthTrips = safeStatsData.monthly?.total || 0;
 
             return (
-                <div className="h-full w-full max-w-md mx-auto bg-slate-50 flex flex-col font-sans relative overflow-y-auto overflow-x-hidden pb-10 shadow-2xl">
-                    <div className="z-10 w-full text-center py-10 bg-white border-b border-gray-200 shadow-sm sticky top-0">
-                        <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-50 rounded-2xl mb-4 text-blue-600 shadow-inner">
-                            <BusFront size={32} />
+                <div className="h-full w-full max-w-md mx-auto flex flex-col font-sans relative overflow-y-auto overflow-x-hidden pb-10 shadow-2xl bg-gradient-to-br from-[#E1F0FF] via-[#FAFAFA] to-[#FFF3E1]">
+                    
+                    <div className="z-10 w-full text-center pt-20 pb-10">
+                        <div className="inline-flex items-center justify-center w-[72px] h-[72px] bg-white rounded-2xl mb-6 text-blue-600 shadow-[0_8px_30px_rgb(0,0,0,0.06)]">
+                            <BusFront size={36} strokeWidth={2.5} />
                         </div>
-                        <h1 className="text-2xl font-extrabold text-slate-800 tracking-tight">客量統計與乘車紀錄</h1>
+                        <h1 className="text-[28px] font-extrabold text-[#1c2331] tracking-tight mb-2">公共交通工具包</h1>
+                        <p className="text-sm font-medium text-slate-500">請選擇你要使用的工具</p>
                     </div>
 
-                    <div className="px-5 mt-6 mb-2">
-                        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2 mb-3"><Plus size={16}/> 進入工具</h2>
-                        <div className="grid grid-cols-2 gap-3">
-                            <button onClick={() => onSelect('app2')} className="text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all active:scale-[0.98] group flex flex-col items-start gap-3">
-                                <div className="bg-blue-100 text-blue-600 p-2 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-colors"><Users size={24} /></div>
-                                <div><h3 className="font-bold text-slate-800 mb-1">客量統計</h3><p className="text-xs text-slate-500">數客、匯出報表</p></div>
-                            </button>
-                            <button onClick={() => onSelect('app1')} className="text-left bg-white border border-slate-200 rounded-2xl p-4 shadow-sm hover:shadow-md hover:-translate-y-1 transition-all active:scale-[0.98] group flex flex-col items-start gap-3">
-                                <div className="bg-yellow-100 text-yellow-600 p-2 rounded-xl group-hover:bg-yellow-500 group-hover:text-white transition-colors"><ClipboardList size={24} /></div>
-                                <div><h3 className="font-bold text-slate-800 mb-1">搭車紀錄</h3><p className="text-xs text-slate-500">留低車務筆記</p></div>
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="px-5 mt-8">
-                        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2 mb-3"><History size={16}/> 數據回顧與統計</h2>
-                        <div className="space-y-3">
-                            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm relative overflow-hidden group hover:border-yellow-300 transition-colors">
-                                <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><BarChart3 size={72}/></div>
-                                <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><ClipboardList size={18} className="text-yellow-500"/> 搭車紀錄統計</h3>
-                                <p className="text-3xl font-extrabold text-blue-600 mb-1">{thisMonthRides} <span className="text-sm font-normal text-gray-500">次 (本月)</span></p>
-                                <p className="text-xs text-gray-400 mb-4">累積總紀錄：{records.length} 條</p>
-                                <button onClick={() => onSelect('stats1')} className="w-full bg-yellow-50 text-yellow-700 font-bold py-3 rounded-xl hover:bg-yellow-100 transition-colors flex items-center justify-center gap-1 active:scale-95 shadow-sm">查看詳細統計 <ChevronRight size={16}/></button>
+                    <div className="px-5 space-y-4">
+                        <button onClick={() => onSelect('app1')} className="w-full text-left bg-white/90 backdrop-blur rounded-3xl p-6 shadow-[0_4px_20px_rgb(0,0,0,0.04)] hover:shadow-md hover:-translate-y-1 transition-all active:scale-[0.98] flex items-center gap-5 border border-white/40">
+                            <div className="bg-[#FFF8E6] text-[#D4A017] p-3.5 rounded-2xl flex-shrink-0">
+                                <MessageSquare size={26} strokeWidth={2} />
                             </div>
+                            <div>
+                                <h3 className="font-bold text-lg text-slate-800 mb-1">搭車紀錄</h3>
+                                <p className="text-xs text-slate-500 leading-relaxed">記錄個人乘車體驗、車型、車隊編號及冷氣等評語，建立私人搭車資料庫。</p>
+                            </div>
+                        </button>
+                        
+                        <button onClick={() => onSelect('app2')} className="w-full text-left bg-white/90 backdrop-blur rounded-3xl p-6 shadow-[0_4px_20px_rgb(0,0,0,0.04)] hover:shadow-md hover:-translate-y-1 transition-all active:scale-[0.98] flex items-center gap-5 border border-white/40">
+                            <div className="bg-[#EBF3FF] text-[#4285F4] p-3.5 rounded-2xl flex-shrink-0">
+                                <Users size={26} strokeWidth={2} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-lg text-slate-800 mb-1">客量統計大師</h3>
+                                <p className="text-xs text-slate-500 leading-relaxed">即時統計每站上下車人數，分析高低客量路段並匯出 Excel 詳細報告。</p>
+                            </div>
+                        </button>
+                    </div>
 
-                            <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm relative overflow-hidden group hover:border-blue-300 transition-colors">
-                                <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity"><Users size={72}/></div>
-                                <h3 className="font-bold text-gray-800 flex items-center gap-2 mb-2"><Users size={18} className="text-blue-500"/> 客量統計回顧</h3>
-                                <p className="text-3xl font-extrabold text-purple-600 mb-1">{thisMonthTrips} <span className="text-sm font-normal text-gray-500">次 (本月)</span></p>
-                                <p className="text-xs text-gray-400 mb-4">累積總行程：{safeStatsData.yearly?.total || 0} 次 (本年)</p>
-                                <button onClick={() => onSelect('stats2')} className="w-full bg-blue-50 text-blue-700 font-bold py-3 rounded-xl hover:bg-blue-100 transition-colors flex items-center justify-center gap-1 active:scale-95 shadow-sm">查看路線排行榜 <ChevronRight size={16}/></button>
+                    {/* 下方保留數據回顧快捷鍵，配合風格設計 */}
+                    <div className="px-6 mt-12 mb-4">
+                        <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center justify-center gap-2 mb-5">
+                            <div className="h-px bg-slate-200 flex-1"></div>
+                            <span>數據回顧與統計</span>
+                            <div className="h-px bg-slate-200 flex-1"></div>
+                        </h2>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div onClick={() => onSelect('stats1')} className="bg-white/80 backdrop-blur rounded-2xl p-4 shadow-sm border border-white/50 cursor-pointer hover:bg-white transition-colors active:scale-95 text-center">
+                                <h3 className="text-xs font-bold text-slate-500 mb-1">搭車紀錄 (本月)</h3>
+                                <p className="text-2xl font-extrabold text-[#D4A017]">{thisMonthRides}</p>
+                            </div>
+                            <div onClick={() => onSelect('stats2')} className="bg-white/80 backdrop-blur rounded-2xl p-4 shadow-sm border border-white/50 cursor-pointer hover:bg-white transition-colors active:scale-95 text-center">
+                                <h3 className="text-xs font-bold text-slate-500 mb-1">客量統計 (本月)</h3>
+                                <p className="text-2xl font-extrabold text-[#4285F4]">{thisMonthTrips}</p>
                             </div>
                         </div>
                     </div>
@@ -1749,7 +1831,6 @@
                     }
                 }
                 
-                // 處理評語邏輯，加入預設提示
                 const defaultTag = `由客量統計自動匯入 (路線: ${route})`;
                 const finalComment = comment && comment.trim() !== '' ? `${comment}\n(${defaultTag})` : defaultTag;
                 
